@@ -1,0 +1,33 @@
+{
+  "id": "https://modulus.josefyang.com/",
+  "name": "Modulus — Engineering Racing Simulator",
+  "short_name": "Modulus",
+  "description": "A modular low-poly engineering racing simulator. Mix parts, balance mechanical trade-offs, and test your builds on a 120Hz physics engine.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0A0C10",
+  "theme_color": "#0A0C10",
+  "categories": ["games", "simulation"],
+  "icons": [
+    {
+      "src": "/assets/icon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/assets/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/assets/logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
