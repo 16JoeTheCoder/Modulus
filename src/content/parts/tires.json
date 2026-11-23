@@ -1,0 +1,112 @@
+[
+  {
+    "id": "rim_steel",
+    "module": "tires",
+    "subCategory": "rim",
+    "name": "Stamped Heavy-Duty Steelies",
+    "description": "Indestructible budget rims with high rotational inertia.",
+    "price": 0,
+    "starterUnlocked": true,
+    "specKey": "Steel",
+    "modifiers": { "unsprungMassPerCornerKg": 12.5, "rotationalInertiaKgM2": 1.25 }
+  },
+  {
+    "id": "rim_cast",
+    "module": "tires",
+    "subCategory": "rim",
+    "name": "Low-Pressure Cast Alloy Wheels",
+    "description": "Clean street/track staple trimming 2.7 kg per corner.",
+    "price": 1800,
+    "starterUnlocked": true,
+    "specKey": "Cast Alloy",
+    "modifiers": { "unsprungMassPerCornerKg": 9.8, "rotationalInertiaKgM2": 0.96 }
+  },
+  {
+    "id": "rim_forged",
+    "module": "tires",
+    "subCategory": "rim",
+    "name": "Monoblock Forged 6061-T6 Alloys",
+    "description": "High stiffness-to-weight ratio sharpening steering response and braking.",
+    "price": 5200,
+    "starterUnlocked": false,
+    "specKey": "Forged Alloy",
+    "modifiers": { "unsprungMassPerCornerKg": 7.4, "rotationalInertiaKgM2": 0.72 }
+  },
+  {
+    "id": "rim_magnesium",
+    "module": "tires",
+    "subCategory": "rim",
+    "name": "Center-Lock Forged Magnesium",
+    "description": "GT3-grade low rotational inertia for explosive corner exit punch.",
+    "price": 9400,
+    "starterUnlocked": false,
+    "specKey": "Magnesium",
+    "modifiers": { "unsprungMassPerCornerKg": 6.1, "rotationalInertiaKgM2": 0.58 }
+  },
+  {
+    "id": "rim_carbon",
+    "module": "tires",
+    "subCategory": "rim",
+    "name": "Autoclave Carbon-Weave Barrels",
+    "description": "Minimum possible rotational and unsprung inertia across all four hubs.",
+    "price": 14800,
+    "starterUnlocked": false,
+    "specKey": "Carbon",
+    "modifiers": { "unsprungMassPerCornerKg": 4.9, "rotationalInertiaKgM2": 0.45 }
+  },
+  {
+    "id": "tire_street",
+    "module": "tires",
+    "subCategory": "compound",
+    "name": "200TW Ultra-High Performance Street",
+    "description": "Works immediately from cold (35-75°C), progressive breakaway, minimal wear.",
+    "price": 0,
+    "starterUnlocked": true,
+    "specKey": "Street",
+    "modifiers": { "peakFrictionMu": 1.08, "optimalTempWindowC": [40, 78], "wearRateMultiplier": 0.35 }
+  },
+  {
+    "id": "tire_semislick",
+    "module": "tires",
+    "subCategory": "compound",
+    "name": "R-Compound Trackday Semi-Slick",
+    "description": "Strong 1.28G grip with forgiving slip angles once warmed past 60°C.",
+    "price": 3400,
+    "starterUnlocked": true,
+    "specKey": "Semi-Slick",
+    "modifiers": { "peakFrictionMu": 1.28, "optimalTempWindowC": [62, 95], "wearRateMultiplier": 0.7 }
+  },
+  {
+    "id": "tire_hard_slick",
+    "module": "tires",
+    "subCategory": "compound",
+    "name": "Endurance Hard Racing Slick",
+    "description": "Consistent high-load slick built to survive long stints without blistering.",
+    "price": 5800,
+    "starterUnlocked": false,
+    "specKey": "Hard Slick",
+    "modifiers": { "peakFrictionMu": 1.42, "optimalTempWindowC": [75, 108], "wearRateMultiplier": 0.85 }
+  },
+  {
+    "id": "tire_med_slick",
+    "module": "tires",
+    "subCategory": "compound",
+    "name": "GT Sprint Medium Slick",
+    "description": "All-round 1.54mu race rubber balancing rapid warm-up and multi-lap pace.",
+    "price": 7600,
+    "starterUnlocked": false,
+    "specKey": "Med Slick",
+    "modifiers": { "peakFrictionMu": 1.54, "optimalTempWindowC": [80, 105], "wearRateMultiplier": 1.2 }
+  },
+  {
+    "id": "tire_soft_slick",
+    "module": "tires",
+    "subCategory": "compound",
+    "name": "Qualifying Time-Attack Soft Slick",
+    "description": "Violent 1.66mu peak grip inside a narrow 85-105°C window; degrades rapidly.",
+    "price": 9800,
+    "starterUnlocked": false,
+    "specKey": "Soft Slick",
+    "modifiers": { "peakFrictionMu": 1.66, "optimalTempWindowC": [85, 104], "wearRateMultiplier": 2.1 }
+  }
+]

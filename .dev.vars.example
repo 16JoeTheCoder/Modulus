@@ -1,0 +1,6 @@
+# Local development variables (Copy to .dev.vars — NEVER commit .dev.vars)
+DEV_MODE=true
+JWT_SECRET=local-dev-super-secret-change-me-32chars
+ADMIN_EMAILS=admin@modulus.josefyang.com
+EMAIL_FROM=noreply@modulus.josefyang.com
+EMAIL_API_KEY=

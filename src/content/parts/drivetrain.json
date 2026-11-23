@@ -1,0 +1,90 @@
+[
+  {
+    "id": "drv_gbx_5h",
+    "module": "drivetrain",
+    "subCategory": "gearbox",
+    "name": "5-Speed Synchromesh H-Pattern",
+    "description": "Light, mechanical, and inexpensive with 220 ms manual shift cadence.",
+    "price": 0,
+    "starterUnlocked": true,
+    "specKey": "5-Spd H",
+    "modifiers": { "massKg": 44, "shiftTimeMs": 220 }
+  },
+  {
+    "id": "drv_gbx_6h",
+    "module": "drivetrain",
+    "subCategory": "gearbox",
+    "name": "6-Speed Close-Ratio H-Pattern",
+    "description": "Tighter ratio steps to keep high-cam engines on the boil (175 ms shifts).",
+    "price": 3800,
+    "starterUnlocked": true,
+    "specKey": "6-Spd H",
+    "modifiers": { "massKg": 50, "shiftTimeMs": 175 }
+  },
+  {
+    "id": "drv_gbx_6seq",
+    "module": "drivetrain",
+    "subCategory": "gearbox",
+    "name": "6-Speed Straight-Cut Dog-Box Sequential",
+    "description": "70 ms flat-shift ignition cut keeps turbo boost spooled between gears.",
+    "price": 11200,
+    "starterUnlocked": false,
+    "specKey": "6-Spd Sequential",
+    "modifiers": { "massKg": 54, "shiftTimeMs": 70 }
+  },
+  {
+    "id": "drv_gbx_7dct",
+    "module": "drivetrain",
+    "subCategory": "gearbox",
+    "name": "7-Speed Motorsport Dual-Clutch",
+    "description": "Seamless 25 ms pre-selected shifts at the penalty of +24 kg gearbox mass.",
+    "price": 16800,
+    "starterUnlocked": false,
+    "specKey": "7-Spd Dual-Clutch",
+    "modifiers": { "massKg": 68, "shiftTimeMs": 25 }
+  },
+  {
+    "id": "drv_diff_open",
+    "module": "drivetrain",
+    "subCategory": "differential",
+    "name": "Open Bevel Differential",
+    "description": "Predictable turn-in, spins the unloaded inside tire out of tight hairpins.",
+    "price": 0,
+    "starterUnlocked": true,
+    "specKey": "Open",
+    "modifiers": { "massKg": 18 }
+  },
+  {
+    "id": "drv_diff_torsen",
+    "module": "drivetrain",
+    "subCategory": "differential",
+    "name": "Helical Torsen Torque-Biasing LSD",
+    "description": "Smooth progressive mechanical torque vectoring without harsh lockup.",
+    "price": 3200,
+    "starterUnlocked": true,
+    "specKey": "Torsen",
+    "modifiers": { "massKg": 21 }
+  },
+  {
+    "id": "drv_diff_15way",
+    "module": "drivetrain",
+    "subCategory": "differential",
+    "name": "Clutch-Pack 1.5-Way Motorsport LSD",
+    "description": "Aggressive exit traction with mild braking lock for crisp corner entry.",
+    "price": 5600,
+    "starterUnlocked": false,
+    "specKey": "1.5-Way LSD",
+    "modifiers": { "massKg": 22 }
+  },
+  {
+    "id": "drv_diff_2way",
+    "module": "drivetrain",
+    "subCategory": "differential",
+    "name": "Clutch-Pack 2-Way Pro LSD",
+    "description": "Symmetric accel/decel lockup—rock-solid high-speed braking and drift control.",
+    "price": 6200,
+    "starterUnlocked": false,
+    "specKey": "2-Way LSD",
+    "modifiers": { "massKg": 23 }
+  }
+]

@@ -1,0 +1,35 @@
+[
+  {
+    "id": "sus_macpherson",
+    "module": "suspension",
+    "subCategory": "geometry",
+    "name": "Motorsport MacPherson Strut Coilovers",
+    "description": "Compact, cost-effective coilovers with moderate dynamic camber recovery.",
+    "price": 0,
+    "starterUnlocked": true,
+    "specKey": "MacPherson Strut",
+    "modifiers": { "unsprungMassPerCornerKg": 14.5, "rigidityMultiplier": 1.0 }
+  },
+  {
+    "id": "sus_wishbone",
+    "module": "suspension",
+    "subCategory": "geometry",
+    "name": "Forged Unequal-Length Double Wishbone",
+    "description": "Maintains optimal negative camber through roll and kerbs while trimming unsprung mass.",
+    "price": 7400,
+    "starterUnlocked": true,
+    "specKey": "Double Wishbone",
+    "modifiers": { "unsprungMassPerCornerKg": 11.5, "rigidityMultiplier": 1.08 }
+  },
+  {
+    "id": "sus_pushrod",
+    "module": "suspension",
+    "subCategory": "geometry",
+    "name": "Inboard Billet Rocker Pushrod System",
+    "description": "Ultra-low unsprung corner weight and rock-steady high-downforce aero platform.",
+    "price": 15200,
+    "starterUnlocked": false,
+    "specKey": "Pushrod Inboard",
+    "modifiers": { "unsprungMassPerCornerKg": 8.5, "cgOffsetY": -0.015, "rigidityMultiplier": 1.16 }
+  }
+]

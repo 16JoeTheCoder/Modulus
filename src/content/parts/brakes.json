@@ -1,0 +1,79 @@
+[
+  {
+    "id": "brk_rotor_iron",
+    "module": "brakes",
+    "subCategory": "rotor",
+    "name": "Vented Cast Iron Rotors",
+    "description": "Strong cold bite from Turn 1, fades when glowing past 620°C.",
+    "price": 0,
+    "starterUnlocked": true,
+    "specKey": "Cast Iron",
+    "modifiers": { "unsprungMassPerCornerKg": 8.4, "maxSafeTempC": 620, "coldBiteFactor": 1.0 }
+  },
+  {
+    "id": "brk_rotor_slotted",
+    "module": "brakes",
+    "subCategory": "rotor",
+    "name": "Two-Piece Slotted J-Hook Steel Rotors",
+    "description": "Aluminum hats cut hub weight while degassing pads up to 740°C.",
+    "price": 3900,
+    "starterUnlocked": true,
+    "specKey": "Slotted Steel",
+    "modifiers": { "unsprungMassPerCornerKg": 6.6, "maxSafeTempC": 740, "coldBiteFactor": 0.98 }
+  },
+  {
+    "id": "brk_rotor_ccm",
+    "module": "brakes",
+    "subCategory": "rotor",
+    "name": "Cross-Drilled Carbon-Ceramic Matrix",
+    "description": "Halves rotor mass and shrugs off 920°C stops, but glazed/weak below 220°C.",
+    "price": 12400,
+    "starterUnlocked": false,
+    "specKey": "Carbon-Ceramic",
+    "modifiers": { "unsprungMassPerCornerKg": 3.8, "maxSafeTempC": 920, "coldBiteFactor": 0.76 }
+  },
+  {
+    "id": "brk_cal_2pot",
+    "module": "brakes",
+    "subCategory": "caliper",
+    "name": "Sliding 2-Piston Cast Calipers",
+    "description": "Standard clamping force suited to street tires.",
+    "price": 0,
+    "starterUnlocked": true,
+    "specKey": "2-Pot",
+    "modifiers": { "brakeTorqueNm": 2400 }
+  },
+  {
+    "id": "brk_cal_4pot",
+    "module": "brakes",
+    "subCategory": "caliper",
+    "name": "Fixed 4-Piston Forged Calipers",
+    "description": "Crisp pedal modulation and strong threshold braking control.",
+    "price": 2800,
+    "starterUnlocked": true,
+    "specKey": "4-Pot",
+    "modifiers": { "brakeTorqueNm": 3250 }
+  },
+  {
+    "id": "brk_cal_6pot",
+    "module": "brakes",
+    "subCategory": "caliper",
+    "name": "6-Piston Radial-Mount GT Calipers",
+    "description": "High-downforce stopping authority with staggered piston bore sizing.",
+    "price": 6400,
+    "starterUnlocked": false,
+    "specKey": "6-Pot",
+    "modifiers": { "brakeTorqueNm": 4150 }
+  },
+  {
+    "id": "brk_cal_8pot",
+    "module": "brakes",
+    "subCategory": "caliper",
+    "name": "8-Pot Billet Endurance Monoblocks",
+    "description": "Maximum clamping force capable of locking slicks at 280 km/h.",
+    "price": 10200,
+    "starterUnlocked": false,
+    "specKey": "8-Pot Monoblock",
+    "modifiers": { "brakeTorqueNm": 4950 }
+  }
+]

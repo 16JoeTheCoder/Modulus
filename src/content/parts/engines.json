@@ -1,0 +1,123 @@
+[
+  {
+    "id": "eng_block_iron",
+    "module": "engine",
+    "subCategory": "block",
+    "name": "Cast Iron Closed-Deck Block",
+    "description": "Heavy-duty iron casting capable of surviving extreme turbo boost on a budget.",
+    "price": 0,
+    "starterUnlocked": true,
+    "specKey": "Cast Iron",
+    "modifiers": { "massKg": 155, "maxSafeTempC": 122, "heatGenerationMultiplier": 0.95 }
+  },
+  {
+    "id": "eng_block_alu",
+    "module": "engine",
+    "subCategory": "block",
+    "name": "Forged Aluminum Alloy Block",
+    "description": "Balanced motorsport block cutting 28 kg from the nose with crisp heat dissipation.",
+    "price": 6500,
+    "starterUnlocked": true,
+    "specKey": "Aluminum Alloy",
+    "modifiers": { "massKg": 127, "maxSafeTempC": 116, "heatGenerationMultiplier": 1.0 }
+  },
+  {
+    "id": "eng_block_mag",
+    "module": "engine",
+    "subCategory": "block",
+    "name": "Billet Magnesium Race Block",
+    "description": "Featherweight CNC billet block (-48 kg vs iron), sensitive to sustained overheating.",
+    "price": 16500,
+    "starterUnlocked": false,
+    "specKey": "Billet Magnesium",
+    "modifiers": { "massKg": 107, "maxSafeTempC": 108, "heatGenerationMultiplier": 1.12 }
+  },
+  {
+    "id": "eng_asp_na",
+    "module": "engine",
+    "subCategory": "aspiration",
+    "name": "Individual Throttle Bodies (NA)",
+    "description": "Zero lag, surgical throttle linearity, and cool intake temperatures.",
+    "price": 0,
+    "starterUnlocked": true,
+    "specKey": "Naturally Aspirated",
+    "modifiers": { "massKg": 6, "powerMultiplier": 1.0, "heatGenerationMultiplier": 0.9 }
+  },
+  {
+    "id": "eng_asp_single_turbo",
+    "module": "engine",
+    "subCategory": "aspiration",
+    "name": "Ball-Bearing Single Turbocharger",
+    "description": "Massive top-end surge with classic spool threshold and intercooler mass.",
+    "price": 7500,
+    "starterUnlocked": true,
+    "specKey": "Single Turbo",
+    "modifiers": { "massKg": 24, "powerMultiplier": 1.38, "heatGenerationMultiplier": 1.32 }
+  },
+  {
+    "id": "eng_asp_twin_turbo",
+    "module": "engine",
+    "subCategory": "aspiration",
+    "name": "Sequential Twin-Turbo Kit",
+    "description": "Broad boost curve and violent midrange torque at higher weight and heat load.",
+    "price": 12500,
+    "starterUnlocked": false,
+    "specKey": "Twin-Turbo",
+    "modifiers": { "massKg": 34, "powerMultiplier": 1.46, "heatGenerationMultiplier": 1.40 }
+  },
+  {
+    "id": "eng_asp_supercharger",
+    "module": "engine",
+    "subCategory": "aspiration",
+    "name": "Twin-Screw Roots Supercharger",
+    "description": "Instant belt-driven boost from idle with minor high-RPM parasitic drag.",
+    "price": 8800,
+    "starterUnlocked": false,
+    "specKey": "Supercharger",
+    "modifiers": { "massKg": 29, "powerMultiplier": 1.28, "heatGenerationMultiplier": 1.22 }
+  },
+  {
+    "id": "eng_exh_steel",
+    "module": "engine",
+    "subCategory": "exhaust",
+    "name": "Mandrel Mild Steel Exhaust",
+    "description": "Durable baseline header and muffler system.",
+    "price": 0,
+    "starterUnlocked": true,
+    "specKey": "Steel",
+    "modifiers": { "massKg": 26, "powerMultiplier": 1.0 }
+  },
+  {
+    "id": "eng_exh_stainless",
+    "module": "engine",
+    "subCategory": "exhaust",
+    "name": "304 Stainless Equal-Length Header",
+    "description": "Improved scavenging (+2% power) and 5 kg rear overhang reduction.",
+    "price": 2400,
+    "starterUnlocked": true,
+    "specKey": "Stainless",
+    "modifiers": { "massKg": 21, "powerMultiplier": 1.02 }
+  },
+  {
+    "id": "eng_exh_titanium",
+    "module": "engine",
+    "subCategory": "exhaust",
+    "name": "Thin-Wall Titanium Race Pipe",
+    "description": "Slashes 15 kg off the rear overhang and unlocks +4.5% top-end flow.",
+    "price": 6800,
+    "starterUnlocked": false,
+    "specKey": "Titanium",
+    "modifiers": { "massKg": 11, "powerMultiplier": 1.045 }
+  },
+  {
+    "id": "eng_exh_inconel",
+    "module": "engine",
+    "subCategory": "exhaust",
+    "name": "F1-Spec Hydroformed Inconel",
+    "description": "Zero thermal fatigue under extreme turbo EGTs (+6% power, ultra-light).",
+    "price": 11500,
+    "starterUnlocked": false,
+    "specKey": "Inconel",
+    "modifiers": { "massKg": 9, "powerMultiplier": 1.06, "heatGenerationMultiplier": 0.94 }
+  }
+]

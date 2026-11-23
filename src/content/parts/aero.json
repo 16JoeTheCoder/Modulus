@@ -1,0 +1,177 @@
+[
+  {
+    "id": "aero_body_steel",
+    "module": "aero",
+    "subCategory": "bodyPanels",
+    "name": "Factory Stamped Steel Bodywork",
+    "description": "Zero extra cost, baseline curb mass.",
+    "price": 0,
+    "starterUnlocked": true,
+    "specKey": "Steel",
+    "modifiers": { "massKg": 95, "cgOffsetY": 0.0 }
+  },
+  {
+    "id": "aero_body_fiberglass",
+    "module": "aero",
+    "subCategory": "bodyPanels",
+    "name": "Widebody Fiberglass Composite Kit",
+    "description": "Trims 28 kg from upper body panels at an accessible price.",
+    "price": 3200,
+    "starterUnlocked": true,
+    "specKey": "Fiberglass",
+    "modifiers": { "massKg": 67, "cgOffsetY": -0.01 }
+  },
+  {
+    "id": "aero_body_kevlar",
+    "module": "aero",
+    "subCategory": "bodyPanels",
+    "name": "Aramid-Kevlar Rally Raid Panels",
+    "description": "Cuts 46 kg and drops CG height for sharper chicanes.",
+    "price": 7800,
+    "starterUnlocked": false,
+    "specKey": "Kevlar",
+    "modifiers": { "massKg": 49, "cgOffsetY": -0.02 }
+  },
+  {
+    "id": "aero_body_carbon",
+    "module": "aero",
+    "subCategory": "bodyPanels",
+    "name": "Pre-Preg Dry Carbon Bodywork",
+    "description": "Slashes 64 kg from high panels, dramatically lowering Center of Gravity.",
+    "price": 15600,
+    "starterUnlocked": false,
+    "specKey": "Dry Carbon Fiber",
+    "modifiers": { "massKg": 31, "cgOffsetY": -0.032 }
+  },
+  {
+    "id": "aero_split_none",
+    "module": "aero",
+    "subCategory": "splitter",
+    "name": "Clean Bumper (No Splitter)",
+    "description": "Minimum front drag for top-speed ovals and low-grip builds.",
+    "price": 0,
+    "starterUnlocked": true,
+    "specKey": "None",
+    "modifiers": { "massKg": 0, "downforceClFront": 0.02, "dragCdDelta": 0.0 }
+  },
+  {
+    "id": "aero_split_street",
+    "module": "aero",
+    "subCategory": "splitter",
+    "name": "Polyurethane Street Chin Lip",
+    "description": "Tames high-speed front lift with negligible top-speed loss.",
+    "price": 1600,
+    "starterUnlocked": true,
+    "specKey": "Street Lip",
+    "modifiers": { "massKg": 3.5, "downforceClFront": 0.22, "dragCdDelta": 0.012 }
+  },
+  {
+    "id": "aero_split_blade",
+    "module": "aero",
+    "subCategory": "splitter",
+    "name": "Alumalite Track Splitter + Diveplanes",
+    "description": "Strong front axle bite in fast sweepers; pair with rear aero.",
+    "price": 4800,
+    "starterUnlocked": false,
+    "specKey": "Track Blade",
+    "modifiers": { "massKg": 6.5, "downforceClFront": 0.52, "dragCdDelta": 0.028 }
+  },
+  {
+    "id": "aero_split_gtpro",
+    "module": "aero",
+    "subCategory": "splitter",
+    "name": "Time-Attack Carbon Undertray Splitter",
+    "description": "Extreme front downforce; induces snap oversteer without a matching GT wing.",
+    "price": 9200,
+    "starterUnlocked": false,
+    "specKey": "GT Pro",
+    "modifiers": { "massKg": 5.2, "downforceClFront": 0.86, "dragCdDelta": 0.045 }
+  },
+  {
+    "id": "aero_diff_none",
+    "module": "aero",
+    "subCategory": "diffuser",
+    "name": "Flat Rear Valance",
+    "description": "Standard underbody exit.",
+    "price": 0,
+    "starterUnlocked": true,
+    "specKey": "None",
+    "modifiers": { "massKg": 0, "downforceClRear": 0.04, "dragCdDelta": 0.0 }
+  },
+  {
+    "id": "aero_diff_shallow",
+    "module": "aero",
+    "subCategory": "diffuser",
+    "name": "Shallow Aluminum Strake Diffuser",
+    "description": "Low-drag underbody suction across a forgiving 55-115 mm ride height window.",
+    "price": 3600,
+    "starterUnlocked": true,
+    "specKey": "Shallow Strakes",
+    "modifiers": {
+      "massKg": 5.0,
+      "downforceClRear": 0.34,
+      "dragCdDelta": 0.008,
+      "diffuserOptimalRideHeightMm": [55, 115]
+    }
+  },
+  {
+    "id": "aero_diff_venturi",
+    "module": "aero",
+    "subCategory": "diffuser",
+    "name": "Deep Ground-Effect Venturi Tunnels",
+    "description": "Huge free downforce at 52-88 mm ride height; stalls abruptly if bottomed out or jacked up.",
+    "price": 9600,
+    "starterUnlocked": false,
+    "specKey": "Deep Venturi",
+    "modifiers": {
+      "massKg": 6.8,
+      "downforceClRear": 0.72,
+      "dragCdDelta": 0.015,
+      "diffuserOptimalRideHeightMm": [52, 88]
+    }
+  },
+  {
+    "id": "aero_wing_none",
+    "module": "aero",
+    "subCategory": "wing",
+    "name": "Wingless Decklid",
+    "description": "Zero wing drag for maximum straight-line velocity.",
+    "price": 0,
+    "starterUnlocked": true,
+    "specKey": "None",
+    "modifiers": { "massKg": 0, "downforceClRear": 0.0, "dragCdDelta": 0.0 }
+  },
+  {
+    "id": "aero_wing_ducktail",
+    "module": "aero",
+    "subCategory": "wing",
+    "name": "Integrated Ducktail Spoiler",
+    "description": "Clean Kammback wake detachment trimming high-speed rear lift.",
+    "price": 2100,
+    "starterUnlocked": true,
+    "specKey": "Ducktail",
+    "modifiers": { "massKg": 2.8, "downforceClRear": 0.24, "dragCdDelta": 0.014 }
+  },
+  {
+    "id": "aero_wing_gt",
+    "module": "aero",
+    "subCategory": "wing",
+    "name": "Single-Element Pedestal GT Wing",
+    "description": "Tunable AoA rear stability for technical road courses.",
+    "price": 5900,
+    "starterUnlocked": false,
+    "specKey": "GT Wing",
+    "modifiers": { "massKg": 7.4, "downforceClRear": 0.62, "dragCdDelta": 0.042 }
+  },
+  {
+    "id": "aero_wing_swan",
+    "module": "aero",
+    "subCategory": "wing",
+    "name": "Swan-Neck Dual-Element Carbon Wing",
+    "description": "Clean underside airflow delivering ferocious cornering G-load at steeper drag cost.",
+    "price": 11400,
+    "starterUnlocked": false,
+    "specKey": "Swan-Neck Dual Element",
+    "modifiers": { "massKg": 6.2, "downforceClRear": 0.96, "dragCdDelta": 0.062 }
+  }
+]

@@ -1,0 +1,44 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "modulus",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-01-01",
+  "routes": [
+    {
+      "pattern": "modulus.josefyang.com",
+      "custom_domain": true
+    }
+  ],
+  "assets": {
+    "not_found_handling": "single-page-application",
+    "binding": "ASSETS",
+    "run_worker_first": [
+      "/api/*",
+      "/",
+      "/index.html",
+      "/admin",
+      "/admin/*",
+      "/robots.txt",
+      "/sitemap.xml"
+    ]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "modulus-db",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "MODULUS_KV",
+      "id": "00000000000000000000000000000000"
+    }
+  ],
+  "vars": {
+    "DEV_MODE": "false",
+    "SESSION_TTL_DAYS": "30",
+    "SITE_URL": "https://modulus.josefyang.com"
+  }
+}

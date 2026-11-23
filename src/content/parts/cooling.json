@@ -1,0 +1,46 @@
+[
+  {
+    "id": "cool_rad_compact",
+    "module": "cooling",
+    "subCategory": "radiator",
+    "name": "Compact Lightweight Core",
+    "description": "Light nose and minimal grille drag—great for NA qualifying sprints, risky with boost.",
+    "price": 1500,
+    "starterUnlocked": true,
+    "specKey": "Compact",
+    "modifiers": { "massKg": 7.5, "coolingCapacityKw": 42, "dragCdDelta": -0.006 }
+  },
+  {
+    "id": "cool_rad_standard",
+    "module": "cooling",
+    "subCategory": "radiator",
+    "name": "OEM+ Single-Row Aluminum Radiator",
+    "description": "Balanced thermal headroom for street and mild-boost track builds.",
+    "price": 0,
+    "starterUnlocked": true,
+    "specKey": "Standard",
+    "modifiers": { "massKg": 12.0, "coolingCapacityKw": 64, "dragCdDelta": 0.0 }
+  },
+  {
+    "id": "cool_rad_dualpass",
+    "module": "cooling",
+    "subCategory": "radiator",
+    "name": "Dual-Pass Crossflow Racing Radiator",
+    "description": "Keeps high-boost single/twin-turbo builds out of thermal limp mode.",
+    "price": 4600,
+    "starterUnlocked": false,
+    "specKey": "Dual-Pass Aluminum",
+    "modifiers": { "massKg": 16.5, "coolingCapacityKw": 95, "dragCdDelta": 0.009 }
+  },
+  {
+    "id": "cool_rad_endurance",
+    "module": "cooling",
+    "subCategory": "radiator",
+    "name": "V-Mount Endurance Radiator + Oil Cooler",
+    "description": "Bulletproof heat rejection under full Qualifying Attack boost (+22 kg front mass).",
+    "price": 8400,
+    "starterUnlocked": false,
+    "specKey": "Endurance Spec",
+    "modifiers": { "massKg": 22.0, "coolingCapacityKw": 135, "dragCdDelta": 0.018 }
+  }
+]
