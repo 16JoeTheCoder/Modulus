@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#111622"/>
+      <stop offset="100%" stop-color="#07090D"/>
+    </linearGradient>
+    <linearGradient id="cyanFacet" x1="92" y1="112" x2="420" y2="400" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#4DF7FF"/>
+      <stop offset="55%" stop-color="#00F0FF"/>
+      <stop offset="100%" stop-color="#0284C7"/>
+    </linearGradient>
+    <linearGradient id="cyanDark" x1="120" y1="140" x2="360" y2="410" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0EA5E9"/>
+      <stop offset="100%" stop-color="#0369A1"/>
+    </linearGradient>
+    <linearGradient id="amberApex" x1="200" y1="220" x2="312" y2="395" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FCD34D"/>
+      <stop offset="100%" stop-color="#F59E0B"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Obsidian Rounded Squircle Backdrop -->
+  <rect width="512" height="512" rx="108" fill="url(#bgGrad)"/>
+
+  <!-- Subtle Telemetry Outer Ring & Crosshair Ticks -->
+  <circle cx="256" cy="256" r="214" stroke="#1E293B" stroke-width="4"/>
+  <circle cx="256" cy="256" r="196" stroke="#00F0FF" stroke-opacity="0.22" stroke-width="2" stroke-dasharray="14 10"/>
+  <path d="M256 30 V58 M256 454 V482 M30 256 H58 M454 256 H482" stroke="#00F0FF" stroke-opacity="0.45" stroke-width="4" stroke-linecap="round"/>
+
+  <!-- Precision Hexagonal Chassis Frame -->
+  <polygon points="256,74 416,154 416,358 256,438 96,358 96,154" fill="#0E131D" stroke="#1E293B" stroke-width="5"/>
+
+  <!-- Faceted Low-Poly "M" Aero Monogram -->
+  <!-- Left Wing Pillar (bright cyan facet) -->
+  <polygon points="128,362 128,158 188,158 188,362" fill="url(#cyanFacet)"/>
+  <!-- Left Inner Diagonal (deep aero facet) -->
+  <polygon points="188,158 256,262 256,338 188,238" fill="url(#cyanDark)"/>
+  <!-- Right Inner Diagonal (bright cyan facet) -->
+  <polygon points="324,158 256,262 256,338 324,238" fill="url(#cyanFacet)"/>
+  <!-- Right Wing Pillar (deep-to-bright metallic facet) -->
+  <polygon points="324,158 384,158 384,362 324,362" fill="url(#cyanDark)"/>
+  <!-- Top Winglet Highlight Bevels -->
+  <polygon points="128,158 188,158 168,186 128,186" fill="#E0FCFF" fill-opacity="0.85"/>
+  <polygon points="324,158 384,158 384,186 344,186" fill="#7DD3FC" fill-opacity="0.7"/>
+
+  <!-- Center of Gravity (CG) Amber Apex Diamond + Crosshair -->
+  <polygon points="256,304 286,348 256,386 226,348" fill="url(#amberApex)"/>
+  <circle cx="256" cy="346" r="10" fill="#0A0C10"/>
+  <circle cx="256" cy="346" r="5" fill="#FDE68A"/>
+</svg>
