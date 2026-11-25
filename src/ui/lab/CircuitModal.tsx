@@ -1,15 +1,17 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Bot, Flag, Flame, MapPin, Play, Trophy, X } from 'lucide-react';
 import { TRACKS_CATALOG } from '../../content';
-import type { ModulusEngine } from '../../core/Engine';
+import { CURRENT_PHYSICS_VERSION, CURRENT_RULESET_VERSION } from '../../contracts/simulation';
 import type { StorageSync } from '../../core/StorageSync';
 import type { ILapLeaderboardEntry, ITrackSplineSchema } from '../../core/types';
 import { TrackPreviewSvg } from './TrackPreviewSvg';
+import { getTrackVersion } from '../engineBridge';
+import { getTrackPersonalBest, makePbPartitionKey } from '../settingsStore';
 
 interface CircuitModalProps {
   open: boolean;
   onClose: () => void;
-  engine: ModulusEngine;
+  buildName: string;
   storage: StorageSync;
   activeTrackId: string;
   balanceVersionId: string;
@@ -28,6 +30,7 @@ export function formatLapTime(ms: number): string {
 export function CircuitModal({
   open,
   onClose,
+  buildName,
   storage,
   activeTrackId,
   balanceVersionId,
@@ -36,15 +39,26 @@ export function CircuitModal({
 }: CircuitModalProps) {
   const [leaderboard, setLeaderboard] = useState<ILapLeaderboardEntry[]>([]);
   const [loadingLb, setLoadingLb] = useState(false);
+  const dialog = useRef<HTMLDialogElement>(null);
 
   const activeTrack: ITrackSplineSchema =
     TRACKS_CATALOG.find((t) => t.id === activeTrackId) ?? TRACKS_CATALOG[0];
+  const trackVersion = getTrackVersion(activeTrack);
+  const personalBest = getTrackPersonalBest(
+    makePbPartitionKey(activeTrack.id, trackVersion, balanceVersionId, CURRENT_RULESET_VERSION)
+  ).bestLapTimeMs;
+
+  useEffect(() => {
+    if (open && !dialog.current?.open) dialog.current?.showModal();
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
     let mounted = true;
     setLoadingLb(true);
-    void storage.fetchLeaderboard(activeTrack.id, balanceVersionId).then((entries) => {
+    void storage.fetchLeaderboard(activeTrack.id, balanceVersionId, {
+      trackVersion, physicsVersion: CURRENT_PHYSICS_VERSION, rulesetVersion: CURRENT_RULESET_VERSION,
+    }).then((entries) => {
       if (!mounted) return;
       setLeaderboard(entries);
       setLoadingLb(false);
@@ -52,23 +66,23 @@ export function CircuitModal({
     return () => {
       mounted = false;
     };
-  }, [open, activeTrack.id, balanceVersionId, storage]);
+  }, [open, activeTrack.id, trackVersion, balanceVersionId, storage]);
 
   if (!open) return null;
 
   return (
-    <div className="pointer-events-auto fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm">
-      <div className="flex max-h-[90dvh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-slate-700/80 bg-[#0B0F17] shadow-2xl">
+    <dialog ref={dialog} aria-labelledby="choose-course-title"
+      onCancel={(event) => { event.preventDefault(); onClose(); }}
+      className="pointer-events-auto m-auto w-[calc(100%-2rem)] max-w-4xl overflow-hidden rounded-2xl border border-slate-700/80 bg-[#0B0F17] text-slate-100 backdrop:bg-black/75">
+      <div className="flex max-h-[90dvh] flex-col overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-slate-800 px-5 py-3.5">
           <div className="flex items-center gap-2.5">
             <Flag className="h-4 w-4 text-cyan-400" />
-            <h2 className="text-sm font-bold uppercase tracking-wider text-slate-100">
-              Circuit Selector & Partitioned Leaderboard
-            </h2>
-            <span className="rounded bg-cyan-500/15 px-2 py-0.5 font-mono text-[10px] font-semibold text-cyan-300">
-              {balanceVersionId}
-            </span>
+            <div>
+              <h2 id="choose-course-title" className="text-base font-semibold">Choose a course</h2>
+              <p className="text-xs text-slate-400">{buildName}</p>
+            </div>
           </div>
           <button
             type="button"
@@ -96,6 +110,7 @@ export function CircuitModal({
                 <button
                   key={track.id}
                   type="button"
+                  aria-pressed={selected}
                   onClick={() => onSelectTrack(track.id)}
                   className={`w-full rounded-xl border p-3.5 text-left transition ${
                     selected
@@ -176,8 +191,12 @@ export function CircuitModal({
           </div>
 
           {/* Right: Live Route Preview + Elevation Profile + Partitioned Leaderboard */}
-          <div className="flex flex-col gap-3 rounded-xl border border-slate-800 bg-[#0E131E] p-3.5">
+          <div className="order-first flex flex-col gap-3 rounded-xl border border-slate-800 bg-[#0E131E] p-3.5 md:order-none">
             <TrackPreviewSvg track={activeTrack} showElevation showLegend />
+            <div className="flex justify-between text-xs text-slate-300">
+              <span>Personal best</span>
+              <span className="tabular-nums text-cyan-200">{personalBest === null ? '—' : formatLapTime(personalBest)}</span>
+            </div>
 
             <div className="flex items-center justify-between border-t border-slate-800/80 pt-2.5">
               <div className="flex items-center gap-2">
@@ -277,16 +296,20 @@ export function CircuitModal({
               type="button"
               onClick={() => {
                 onClose();
-                onLaunchDrive(false);
+                onLaunchDrive(false, 'practice');
               }}
               className="flex items-center gap-1.5 rounded-lg bg-cyan-400 px-4 py-2 text-xs font-bold uppercase tracking-wider text-slate-950 shadow-[0_0_20px_rgba(0,240,255,0.3)] transition hover:bg-cyan-300"
             >
               <Play className="h-3.5 w-3.5 fill-current" />
-              Drive on Track
+              Practice
+            </button>
+            <button type="button" onClick={() => { onClose(); onLaunchDrive(false, 'time_trial'); }}
+              className="flex items-center gap-1.5 rounded-lg border border-cyan-400/50 px-4 py-2 text-xs font-bold uppercase tracking-wider text-cyan-200 hover:bg-cyan-400/15">
+              <Trophy className="h-3.5 w-3.5" /> Time Trial
             </button>
           </div>
         </div>
       </div>
-    </div>
+    </dialog>
   );
 }

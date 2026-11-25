@@ -58,7 +58,9 @@ export class DeterministicInputShaper {
     dt: number,
     raw: IRawDriverAxes,
     state: Pick<IVehicleRuntimeState, 'speedMs' | 'localVelocity' | 'yawRateRadS'>,
-    assistPreset: AssistPreset
+    assistPreset: AssistPreset,
+    steeringResponse = 1,
+    driftForgiveness = 0
   ): IShapedDriverAxes {
     const throttleTarget = clamp(raw.throttle, 0, 1);
     const brakeTarget = clamp(raw.brake, 0, 1);
@@ -75,7 +77,7 @@ export class DeterministicInputShaper {
     // Speed-progressive steering authority, expanding dynamically during drifts / handbrake
     // so keyboard players always have sufficient lock to initiate, hold, and link slides.
     const speedMs = Math.max(0, state.speedMs);
-    const baseAuthority = computeSpeedSteerAuthority(speedMs);
+    const baseAuthority = computeSpeedSteerAuthority(speedMs / steeringResponse);
     const bodySlipRad =
       state.localVelocity.z > 2.5
         ? Math.atan2(state.localVelocity.x, state.localVelocity.z)
@@ -96,7 +98,7 @@ export class DeterministicInputShaper {
       ? 7.8 * transitionBoost
       : baseTurnInRate * nearCenterBoost;
 
-    this.steer = moveTowards(this.steer, targetSteer, steerRate * dt);
+    this.steer = moveTowards(this.steer, targetSteer, steerRate * steeringResponse * dt);
 
     // Catchable counter-steer assist scaled by assistPreset (0 in Pro).
     // Gently aligns front wheels into a developing rear slide while backing off during
@@ -108,9 +110,11 @@ export class DeterministicInputShaper {
     if (assistGain > 0 && state.localVelocity.z > 4.0) {
       const speedBlend = clamp((state.localVelocity.z - 4.0) / 8.0, 0, 1);
       const handbrakeScale = 1.0 - this.handbrake * 0.78;
+      const recovery = -bodySlipRad * assistGain * (1 + driftForgiveness * 0.9)
+        - state.yawRateRadS * driftForgiveness * 0.08;
       // Sliding right (+vRight -> +bodySlipRad) -> counter-steer right (-steer)
       counterSteer =
-        clamp(-bodySlipRad * assistGain, -0.46, 0.46) * speedBlend * handbrakeScale;
+        clamp(recovery, -0.46, 0.46) * speedBlend * handbrakeScale;
     }
 
     const finalSteer = clamp(this.steer + counterSteer, -1, 1);

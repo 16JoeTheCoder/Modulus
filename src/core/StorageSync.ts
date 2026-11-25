@@ -11,6 +11,7 @@ import {
 import {
   DEFAULT_BALANCE_CONFIG,
   GlobalBalanceConfigSchema,
+  migrateStockDrivingPace,
   type IAuthUser,
   type IGarageSyncResponse,
   type IGlobalBalanceConfig,
@@ -45,6 +46,8 @@ export class StorageSync {
   private state: ILocalPersistedGarage;
   private balanceConfig: IGlobalBalanceConfig = DEFAULT_BALANCE_CONFIG;
   private idbSaveTimer: ReturnType<typeof setTimeout> | null = null;
+  private garageWritePending = false;
+  private garageRevision = 0;
 
   constructor(events: ITypedEventBus) {
     this.events = events;
@@ -130,7 +133,7 @@ export class StorageSync {
     if (cachedBalance) {
       const parsed = GlobalBalanceConfigSchema.safeParse(cachedBalance);
       if (parsed.success) {
-        this.balanceConfig = parsed.data;
+        this.balanceConfig = migrateStockDrivingPace(parsed.data);
       }
     }
 
@@ -156,9 +159,9 @@ export class StorageSync {
         const raw = await cfgRes.json();
         const parsed = GlobalBalanceConfigSchema.safeParse(raw);
         if (parsed.success) {
-          this.balanceConfig = parsed.data;
-          await this.idbPut('balance_config', parsed.data);
-          this.events.emit('config:updated', { config: parsed.data });
+          this.balanceConfig = migrateStockDrivingPace(parsed.data);
+          await this.idbPut('balance_config', this.balanceConfig);
+          this.events.emit('config:updated', { config: this.balanceConfig });
         }
       }
     } catch {
@@ -166,10 +169,13 @@ export class StorageSync {
     }
 
     try {
-      const garageRes = await fetch('/api/garage', { credentials: 'include' });
+      const revision = this.garageRevision;
+      const garageRes = await fetch('/api/garage', { credentials: 'include', cache: 'no-store' });
       if (garageRes.ok) {
         const data = (await garageRes.json()) as IGarageSyncResponse;
-        this.reconcileCloudGarage(data);
+        if (!this.garageWritePending && revision === this.garageRevision) {
+          this.reconcileCloudGarage(data);
+        }
       }
     } catch {
       // Offline or unauthenticated
@@ -260,10 +266,16 @@ export class StorageSync {
    * Explicit Batched Mutation 1: Save Build to D1
    */
   public async saveBuildToCloud(build: IVehicleBuildConfig): Promise<boolean> {
+    if (this.garageWritePending) return false;
+    this.garageWritePending = true;
+    this.garageRevision++;
     this.mirrorLocalBuild(build);
     await this.idbPut('garage', this.state);
 
-    if (!this.user) return true;
+    if (!this.user) {
+      this.garageWritePending = false;
+      return true;
+    }
 
     this.events.emit('sync:status', { syncing: true, lastSyncedAt: null, error: null });
     try {
@@ -284,6 +296,36 @@ export class StorageSync {
         error: err instanceof Error ? err.message : 'Sync error',
       });
       return false;
+    } finally {
+      this.garageWritePending = false;
+      this.garageRevision++;
+    }
+  }
+
+  public async deleteSavedBuild(buildId: string): Promise<IVehicleBuildConfig> {
+    if (this.garageWritePending) throw new Error('A garage save is in progress. Try again in a moment.');
+    this.garageWritePending = true;
+    this.garageRevision++;
+    try {
+      if (this.user) {
+        const res = await fetch(`/api/garage/build/${encodeURIComponent(buildId)}`, {
+          method: 'DELETE',
+          credentials: 'include',
+        });
+        if (!res.ok) throw new Error('Cloud deletion failed. Reconnect and try again.');
+      }
+
+      const remaining = this.state.savedBuilds.filter((build) => build.id !== buildId);
+      const active = this.state.activeBuild.id === buildId
+        ? remaining[0] ?? { ...createStarterBuild(), id: `build_${crypto.randomUUID()}` }
+        : this.state.activeBuild;
+      if (remaining.length === 0) remaining.push(active);
+      this.state = { ...this.state, savedBuilds: remaining, activeBuild: active, updatedAt: new Date().toISOString() };
+      await this.idbPut('garage', this.state);
+      return active;
+    } finally {
+      this.garageWritePending = false;
+      this.garageRevision++;
     }
   }
 

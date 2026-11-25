@@ -28,6 +28,7 @@ import { EngineeringLab } from './lab';
 import { CircuitModal } from './lab/CircuitModal';
 import { SettingsModal } from './settings/SettingsModal';
 import {
+  clearResumableSession,
   getPlayerSettings,
   getResumableSession,
   recordLocalLapAttempt,
@@ -334,15 +335,19 @@ export function AppShell({ engine, storage }: IAppShellProps) {
           storage={storage}
           compiled={compiled}
           savedBuilds={savedBuilds}
-          activeTrack={activeTrack}
           balanceConfig={balanceConfig}
           credits={credits}
           user={user}
           settings={settings}
-          sessionMode={sessionMode}
-          onChangeSessionMode={setSessionMode}
           onSelectBuild={(b) => engine.updateBuild(b)}
-          onBuildsChanged={() => setSavedBuilds([...storage.getGarageState().savedBuilds])}
+          onBuildsChanged={() => {
+            const builds = storage.getGarageState().savedBuilds;
+            setSavedBuilds([...builds]);
+            if (resumableSession && !builds.some((build) => build.id === resumableSession.buildId)) {
+              clearResumableSession();
+              setResumableSession(null);
+            }
+          }}
           onOpenLab={(mode) => {
             updatePlayerSettings({ labMode: mode });
             setScreen('lab');
@@ -350,7 +355,6 @@ export function AppShell({ engine, storage }: IAppShellProps) {
           onOpenCircuitModal={() => setCircuitModalOpen(true)}
           onOpenSettings={handleOpenSettings}
           onOpenAuth={() => engine.events.emit('auth:open-modal', undefined)}
-          onLaunchDrive={handleLaunchDrive}
         />
       )}
 
@@ -370,6 +374,7 @@ export function AppShell({ engine, storage }: IAppShellProps) {
         settings={settings}
         sessionMode={sessionMode}
         debriefOpen={Boolean(activeDebrief || activeDriftDebrief)}
+        onFinishDrift={sessionMode === 'drift' ? driftSession.finishCurrentRun : undefined}
         onBackToGarage={() => {
           setActiveDebrief(null);
           setActiveDriftDebrief(null);
@@ -396,7 +401,7 @@ export function AppShell({ engine, storage }: IAppShellProps) {
         onTelemetryPeaks={handleTelemetryPeaks}
       />
 
-      {screen === 'drive' && sessionMode === 'drift' && !activeDriftDebrief && (
+      {settings.showTopHud && screen === 'drive' && sessionMode === 'drift' && !activeDriftDebrief && (
         <DriftHud
           liveState={driftSession.liveState}
           activeZoneName={driftSession.activeZoneName}
@@ -461,7 +466,7 @@ export function AppShell({ engine, storage }: IAppShellProps) {
       <CircuitModal
         open={circuitModalOpen}
         onClose={() => setCircuitModalOpen(false)}
-        engine={engine}
+        buildName={compiled.build.name}
         storage={storage}
         activeTrackId={activeTrack.id}
         balanceVersionId={balanceConfig.version_id}

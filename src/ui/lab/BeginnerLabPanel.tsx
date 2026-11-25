@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
-import { Check, Gauge, Lock, Sliders, Sparkles } from 'lucide-react';
-import { createStarterBuild, PARTS_CATALOG } from '../../content';
+import { Check, Gauge, Sliders, Sparkles } from 'lucide-react';
+import { CHASSIS_BY_ID, createFactoryBuild, createStarterBuild } from '../../content';
 import { compileVehicleBuild } from '../../core/math/vehicleCompiler';
 import type {
   ICompiledVehicle,
@@ -9,6 +9,7 @@ import type {
   TireCompound,
 } from '../../core/types';
 import { formatSpeedFromKph, speedUnitLabel, type SpeedUnit } from '../settingsStore';
+import { AuxiliaryPartSelector, PartSelector } from './ModuleEditor';
 
 interface BeginnerLabPanelProps {
   build: IVehicleBuildConfig;
@@ -16,6 +17,7 @@ interface BeginnerLabPanelProps {
   balanceConfig: IGlobalBalanceConfig;
   speedUnit: SpeedUnit;
   isOwned: (id: string) => boolean;
+  onPurchase: (id: string) => Promise<{ ok: boolean; error?: string }>;
   onChangeBuild: (next: IVehicleBuildConfig) => void;
   onSwitchToAdvanced: () => void;
 }
@@ -204,18 +206,19 @@ export function BeginnerLabPanel({
   balanceConfig,
   speedUnit,
   isOwned,
+  onPurchase,
   onChangeBuild,
   onSwitchToAdvanced,
 }: BeginnerLabPanelProps) {
   const baselineCompiled = useMemo(
-    () => compileVehicleBuild(createStarterBuild(), balanceConfig),
-    [balanceConfig]
+    () => {
+      const chassis = CHASSIS_BY_ID.get(build.chassisId);
+      return compileVehicleBuild(chassis ? createFactoryBuild(chassis, 'stock_comparison') : createStarterBuild(), balanceConfig);
+    },
+    [build.chassisId, balanceConfig]
   );
 
-  const tireParts = useMemo(
-    () => PARTS_CATALOG.filter((p) => p.module === 'tires' && p.subCategory === 'compound'),
-    []
-  );
+  const shop = { priceMult: balanceConfig.economy_bias.part_price_mult, isOwned, onPurchase };
 
   const unitLabel = speedUnitLabel(speedUnit);
   const deltaPower = Math.round(compiled.peakPowerHp - baselineCompiled.peakPowerHp);
@@ -233,7 +236,6 @@ export function BeginnerLabPanel({
             <Sparkles className="h-3 w-3" />
             Delta vs Stock Baseline
           </span>
-          <span className="font-mono text-slate-400">Same Build File</span>
         </div>
         <div className="grid grid-cols-3 gap-1.5 font-mono text-[10px]">
           <div className="rounded bg-slate-950/75 px-2 py-1">
@@ -256,6 +258,36 @@ export function BeginnerLabPanel({
           </div>
         </div>
       </div>
+
+      <fieldset className="space-y-2 rounded-xl border border-slate-800 p-3">
+        <legend className="px-1 text-xs font-semibold text-slate-200">Quick setup</legend>
+        <div className="grid grid-cols-2 gap-3">
+          {(['paintHex', 'accentHex'] as const).map((key) => (
+            <label key={key} className="flex items-center justify-between gap-2 text-xs text-slate-300">
+              {key === 'paintHex' ? 'Body paint' : 'Accent'}
+              <input type="color" value={build[key]} onChange={(event) => onChangeBuild({ ...build, [key]: event.target.value })}
+                className="h-7 w-9 cursor-pointer rounded border border-slate-700 bg-slate-900" />
+            </label>
+          ))}
+        </div>
+        <label className="block text-xs text-slate-300">Ride height
+          <select value={build.suspension.rideHeightFrontMm} onChange={(event) => {
+            const height = Number(event.target.value);
+            onChangeBuild({ ...build, suspension: { ...build.suspension, rideHeightFrontMm: height, rideHeightRearMm: height + 5 } });
+          }} className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1.5">
+            {![72, 95, 128].includes(build.suspension.rideHeightFrontMm) && <option value={build.suspension.rideHeightFrontMm} disabled>Current setup</option>}
+            <option value={72}>Low · smooth asphalt</option>
+            <option value={95}>Road · mixed driving</option>
+            <option value={128}>Raised · rough rally stages</option>
+          </select>
+        </label>
+        <label className="block text-xs text-slate-300">Starting fuel
+          <input type="range" min="5" max="80" step="1" value={build.fuelAndCooling.fuelLoadL}
+            onChange={(event) => onChangeBuild({ ...build, fuelAndCooling: { ...build.fuelAndCooling, fuelLoadL: Number(event.target.value) } })}
+            className="block w-full accent-cyan-400" />
+          <span className="text-slate-400">{build.fuelAndCooling.fuelLoadL} L · More fuel adds weight</span>
+        </label>
+      </fieldset>
 
       {/* 1. OEM Engine Packages */}
       <div className="space-y-1.5">
@@ -287,51 +319,16 @@ export function BeginnerLabPanel({
         </div>
       </div>
 
-      {/* 2. Tire Compound */}
-      <div className="space-y-1.5">
-        <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-300">
-          2. Tire Compound
-        </div>
-        <div className="grid grid-cols-2 gap-1.5">
-          {tireParts.slice(0, 6).map((part) => {
-            const owned = isOwned(part.id);
-            const active = build.equippedPartIds.tireCompoundId === part.id;
-            return (
-              <button
-                key={part.id}
-                type="button"
-                disabled={!owned}
-                onClick={() =>
-                  onChangeBuild({
-                    ...build,
-                    equippedPartIds: { ...build.equippedPartIds, tireCompoundId: part.id },
-                    wheelsAndTires: {
-                      ...build.wheelsAndTires,
-                      tireCompound: part.specKey as TireCompound,
-                    },
-                  })
-                }
-                className={`rounded-lg border p-2 text-left transition ${
-                  active
-                    ? 'border-cyan-400 bg-cyan-500/15 text-white'
-                    : owned
-                    ? 'border-slate-800 bg-slate-900/75 text-slate-200 hover:border-slate-600'
-                    : 'cursor-not-allowed border-slate-800/60 bg-slate-950/60 text-slate-500'
-                }`}
-              >
-                <div className="flex items-center justify-between text-[11px] font-bold">
-                  <span className="truncate">{part.specKey}</span>
-                  {!owned && <Lock className="h-3 w-3 text-amber-400/70" />}
-                  {active && <Check className="h-3 w-3 text-cyan-400" />}
-                </div>
-                <div className="mt-0.5 truncate text-[9px] text-slate-400">
-                  {owned ? part.description : 'Unlock in Advanced Lab'}
-                </div>
-              </button>
-            );
-          })}
-        </div>
-      </div>
+      <PartSelector {...shop} label="Tire compound" module="tires" subCategory="compound"
+        equippedPartId={build.equippedPartIds.tireCompoundId}
+        onEquip={(part) => onChangeBuild({
+          ...build,
+          equippedPartIds: { ...build.equippedPartIds, tireCompoundId: part.id },
+          wheelsAndTires: { ...build.wheelsAndTires, tireCompound: part.specKey as TireCompound },
+        })} />
+
+      <AuxiliaryPartSelector {...shop} slot="brakePadId" build={build} onChangeBuild={onChangeBuild} />
+      <AuxiliaryPartSelector {...shop} slot="oilCoolerId" build={build} onChangeBuild={onChangeBuild} />
 
       {/* 3. Final Drive Gearing */}
       <div className="space-y-1.5">

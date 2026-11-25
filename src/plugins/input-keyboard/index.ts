@@ -167,6 +167,7 @@ class InputKeyboardController {
 
     const freshBrakePress = (brakeHeld && !this.prevBrakeHeld) || Boolean(input.brakeFreshPress);
     this.prevBrakeHeld = brakeHeld;
+    const tuning = this.ctx.getBalanceConfig().physics_bias;
 
     const shaped = this.shaper.step(
       dt,
@@ -177,7 +178,9 @@ class InputKeyboardController {
         handbrake: handbrakeRaw,
       },
       state,
-      state.assistPreset
+      state.assistPreset,
+      tuning.steering_response,
+      tuning.drift_forgiveness
     );
 
     // Record raw & shaped steering telemetry

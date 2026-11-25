@@ -1,14 +1,9 @@
 import * as THREE from 'three';
+import { CHASSIS_BY_ID } from '../../content';
 import type { ICompiledVehicle, PartModuleCategory } from '../../core/types';
 import { getCockpitAnchors } from '../../ui/engineBridge';
-
-export interface ICockpitInteriorRig {
-  group: THREE.Group;
-  steeringWheelPivot: THREE.Group;
-  shiftLedMaterials: THREE.MeshStandardMaterial[];
-  lockupLedMaterial: THREE.MeshStandardMaterial;
-  dashGlowMaterial: THREE.MeshStandardMaterial;
-}
+import { buildCockpit } from './buildCockpit';
+import { getRoadBodyProfile } from './roadBodyProfiles';
 
 export interface IWheelVisualRig {
   /** Root anchored to carRoot; moves vertically with suspension */
@@ -32,11 +27,11 @@ export interface IAssembledCarRig {
   /** Exterior canopy glass mesh (hidden in cockpit POV for unobstructed sightlines) */
   cabinMesh: THREE.Mesh;
   /** Exterior roof cap mesh (hidden in cockpit POV to avoid low overhang clipping) */
-  roofMesh: THREE.Mesh;
+  roofMesh: THREE.Mesh | null;
   /** Interior bucket seat mesh (hidden in cockpit POV to avoid camera clip) */
   seatMesh: THREE.Mesh;
-  /** Live cockpit interior rig (dash, A-pillars, mirrors, steering wheel, shift LEDs) */
-  cockpitRig: ICockpitInteriorRig;
+  exteriorGroup: THREE.Group;
+  cockpitRig: ReturnType<typeof buildCockpit>;
   /** All primary exterior body shell meshes for X-Ray Wireframe toggle */
   bodyShellMaterials: THREE.MeshStandardMaterial[];
   /** Crisp cyan holographic edge lines shown when X-Ray Wireframe is active */
@@ -113,10 +108,12 @@ export function buildAssembledCar(compiled: ICompiledVehicle): IAssembledCarRig 
   const halfWb = wheelbaseM * 0.5;
   const halfTrack = trackWidthM * 0.5;
   const bodyWidth = trackWidthM * 0.98;
-  const frontOverhang = bodyStyle === 'prototype' ? 0.94 : bodyStyle === 'wedge' ? 0.86 : 0.82;
-  const rearOverhang = bodyStyle === 'prototype' ? 0.94 : bodyStyle === 'wedge' ? 0.84 : 0.80;
+  const roadGeometry = CHASSIS_BY_ID.get(build.chassisId)?.roadGeometry;
+  const frontOverhang = roadGeometry?.frontOverhangM ?? (bodyStyle === 'prototype' ? 0.94 : bodyStyle === 'wedge' ? 0.86 : 0.82);
+  const rearOverhang = roadGeometry?.rearOverhangM ?? (bodyStyle === 'prototype' ? 0.94 : bodyStyle === 'wedge' ? 0.84 : 0.80);
   const frontZ = halfWb + frontOverhang;
   const rearZ = -(halfWb + rearOverhang);
+  const roadBody = roadGeometry && getRoadBodyProfile(bodyStyle, halfWb, frontZ, rearZ, roadGeometry.collisionBottomM);
 
   const root = new THREE.Group();
   root.name = 'modulus_vehicle_root';
@@ -240,7 +237,11 @@ export function buildAssembledCar(compiled: ICompiledVehicle): IAssembledCarRig 
   let cabinProfile: Array<[number, number]>;
   let cabinWidthRatio = 0.72;
 
-  if (bodyStyle === 'prototype') {
+  if (roadBody) {
+    lowerProfile = roadBody.body;
+    cabinProfile = roadBody.cabin;
+    cabinWidthRatio = roadBody.cabinWidth;
+  } else if (bodyStyle === 'prototype') {
     // Low Le Mans ground-effect LMP prototype
     lowerProfile = [
       [rearZ, 0.22],
@@ -324,18 +325,18 @@ export function buildAssembledCar(compiled: ICompiledVehicle): IAssembledCarRig 
   // Sculpted widebody fender haunches (front + rear wheel arch blisters)
   const fenderGeoF = track(new THREE.BoxGeometry(bodyWidth * 1.04, 0.36, 0.88));
   const fenderF = addShellMesh(fenderGeoF, primaryPaintMat, 'fender_front');
-  fenderF.position.set(0, 0.44, halfWb);
+  fenderF.position.set(0, roadBody ? hardpoints.wheelFL.y + 0.06 : 0.44, halfWb);
 
   const fenderGeoR = track(new THREE.BoxGeometry(bodyWidth * 1.07, 0.40, 0.96));
   const fenderR = addShellMesh(fenderGeoR, primaryPaintMat, 'fender_rear');
-  fenderR.position.set(0, 0.47, -halfWb);
+  fenderR.position.set(0, roadBody ? hardpoints.wheelRL.y + 0.09 : 0.47, -halfWb);
 
   // Accent racing center stripe along hood & roof deck
   const stripeLen = frontZ - rearZ - 0.25;
-  const hoodStripeGeo = track(new THREE.BoxGeometry(bodyWidth * 0.14, 0.025, stripeLen * 0.42));
+  const hoodStripeGeo = track(new THREE.BoxGeometry(bodyWidth * 0.14, 0.025, stripeLen * (roadBody ? 0.14 : 0.42)));
   const hoodStripe = addShellMesh(hoodStripeGeo, accentMat, 'livery_hood_stripe');
-  hoodStripe.position.set(0, bodyStyle === 'prototype' ? 0.66 : 0.72, frontZ * 0.45);
-  hoodStripe.rotation.x = bodyStyle === 'wedge' ? 0.18 : 0.11;
+  hoodStripe.position.set(0, roadBody?.hoodHeight ?? (bodyStyle === 'prototype' ? 0.66 : 0.72), frontZ * (roadBody ? 0.65 : 0.45));
+  hoodStripe.rotation.x = roadBody ? 0.035 : bodyStyle === 'wedge' ? 0.18 : 0.11;
 
   // Greenhouse cockpit glass canopy
   const cabinGeo = track(createExtrudedProfile(cabinProfile, bodyWidth * cabinWidthRatio, 0.035));
@@ -345,12 +346,35 @@ export function buildAssembledCar(compiled: ICompiledVehicle): IAssembledCarRig 
 
   // Roof cap panel in primary paint
   const roofW = bodyWidth * cabinWidthRatio * 0.84;
-  const roofL = bodyStyle === 'prototype' ? halfWb * 0.62 : halfWb * 0.68;
-  const roofY = bodyStyle === 'prototype' ? 1.06 : bodyStyle === 'wedge' ? 1.12 : 1.20;
-  const roofZ = bodyStyle === 'prototype' ? 0.04 : -halfWb * 0.08;
-  const roofGeo = track(new THREE.BoxGeometry(roofW, 0.045, roofL));
-  const roofMesh = addShellMesh(roofGeo, primaryPaintMat, 'chassis_roof_cap');
-  roofMesh.position.set(0, roofY, roofZ);
+  const roofL = roadBody ? cabinProfile[2][0] - cabinProfile[1][0] : bodyStyle === 'prototype' ? halfWb * 0.62 : halfWb * 0.68;
+  const roofY = roadBody ? cabinProfile[2][1] : bodyStyle === 'prototype' ? 1.06 : bodyStyle === 'wedge' ? 1.12 : 1.20;
+  const roofZ = roadBody ? (cabinProfile[2][0] + cabinProfile[1][0]) / 2 : bodyStyle === 'prototype' ? 0.04 : -halfWb * 0.08;
+  let roofMesh: THREE.Mesh | null = null;
+  if (bodyStyle !== 'roadster') {
+    const roofGeo = track(new THREE.BoxGeometry(roofW, 0.045, roofL));
+    roofMesh = addShellMesh(roofGeo, primaryPaintMat, 'chassis_roof_cap');
+    roofMesh.position.set(0, roofY, roofZ);
+  }
+
+  if (bodyStyle === 'pickup') {
+    const bedFrontZ = -halfWb * 0.27;
+    const bedRearZ = rearZ + 0.08;
+    const bedLength = bedFrontZ - bedRearZ;
+    const bedCenterZ = (bedFrontZ + bedRearZ) / 2;
+    const liner = new THREE.Mesh(track(new THREE.BoxGeometry(bodyWidth * 0.83, 0.045, bedLength)), darkTrimMat);
+    liner.position.set(0, 0.88, bedCenterZ);
+    bodyGroup.add(liner);
+    const railGeo = track(new THREE.BoxGeometry(0.09, 0.21, bedLength));
+    for (const side of [-1, 1]) {
+      const rail = new THREE.Mesh(railGeo, primaryPaintMat);
+      rail.position.set(side * bodyWidth * 0.43, 0.95, bedCenterZ);
+      rail.castShadow = true;
+      bodyGroup.add(rail);
+    }
+    const tailgate = new THREE.Mesh(track(new THREE.BoxGeometry(bodyWidth * 0.91, 0.21, 0.085)), primaryPaintMat);
+    tailgate.position.set(0, 0.95, bedRearZ);
+    bodyGroup.add(tailgate);
+  }
 
   // LMP Prototype dorsal shark-fin stabilizer
   if (bodyStyle === 'prototype') {
@@ -362,7 +386,7 @@ export function buildAssembledCar(compiled: ICompiledVehicle): IAssembledCarRig 
   // Underbody flat floor pan
   const floorGeo = track(new THREE.BoxGeometry(bodyWidth * 0.86, 0.06, frontZ - rearZ - 0.2));
   const floorMesh = new THREE.Mesh(floorGeo, darkTrimMat);
-  floorMesh.position.set(0, 0.13, (frontZ + rearZ) * 0.5);
+  floorMesh.position.set(0, roadGeometry?.collisionBottomM ?? 0.13, (frontZ + rearZ) * 0.5);
   bodyGroup.add(floorMesh);
 
   // =========================================================================
@@ -374,214 +398,13 @@ export function buildAssembledCar(compiled: ICompiledVehicle): IAssembledCarRig 
 
   const seatGeo = track(new THREE.BoxGeometry(0.44, 0.52, 0.42));
   const seatMesh = new THREE.Mesh(seatGeo, darkTrimMat);
-  seatMesh.position.set(driverX, 0.56, anchors.cockpitEyeLocal.z - 0.08);
+  seatMesh.position.set(driverX, roadBody ? anchors.cockpitEyeLocal.y - 0.50 : 0.56, anchors.cockpitEyeLocal.z - 0.08);
   seatMesh.rotation.x = -0.18;
   bodyGroup.add(seatMesh);
 
-  // Sculpted Motorsport Cockpit Interior (Dash, Binnacle, Live Shift LEDs, Steering Wheel, A-Pillars, Mirrors)
-  const cockpitGroup = new THREE.Group();
-  cockpitGroup.name = 'vehicle_cockpit_interior';
-  bodyGroup.add(cockpitGroup);
-
-  const dashMat = track(
-    new THREE.MeshStandardMaterial({
-      color: '#111620',
-      roughness: 0.85,
-      metalness: 0.12,
-      flatShading: true,
-    })
-  );
-  const alcantaraMat = track(
-    new THREE.MeshStandardMaterial({
-      color: '#1A202C',
-      roughness: 0.94,
-      metalness: 0.05,
-    })
-  );
-  const dashGlowMaterial = track(
-    new THREE.MeshStandardMaterial({
-      color: '#0A1624',
-      emissive: '#00F0FF',
-      emissiveIntensity: 0.55,
-      roughness: 0.25,
-      metalness: 0.2,
-    })
-  );
-  const lockupLedMaterial = track(
-    new THREE.MeshStandardMaterial({
-      color: '#3B0D14',
-      emissive: '#F43F5E',
-      emissiveIntensity: 0.0,
-      roughness: 0.2,
-    })
-  );
-
-  const cabinInnerW = bodyWidth * cabinWidthRatio * 1.06;
-  const dashY = wheelAnchor.y - 0.03;
-  const dashZ = wheelAnchor.z + 0.25;
-
-  // Main upper dash cowl (covers lower fuselage deck cleanly inside cabin while keeping hood visible)
-  const dashCowlGeo = track(new THREE.BoxGeometry(cabinInnerW, 0.14, 0.44));
-  const dashCowl = new THREE.Mesh(dashCowlGeo, dashMat);
-  dashCowl.position.set(0, dashY, dashZ);
-  cockpitGroup.add(dashCowl);
-
-  // Dark lower dash / knee bolster apron behind steering wheel so body shell never bleeds into cockpit
-  const apronGeo = track(new THREE.BoxGeometry(cabinInnerW * 1.08, 0.12, 0.72));
-  const apronMesh = new THREE.Mesh(apronGeo, dashMat);
-  apronMesh.position.set(0, dashY - 0.04, wheelAnchor.z - 0.08);
-  cockpitGroup.add(apronMesh);
-
-  // Center tunnel / console divider
-  const consoleGeo = track(new THREE.BoxGeometry(0.18, 0.24, 0.72));
-  const consoleMesh = new THREE.Mesh(consoleGeo, dashMat);
-  consoleMesh.position.set(0, 0.52, wheelAnchor.z - 0.12);
-  cockpitGroup.add(consoleMesh);
-
-  // Driver instrument binnacle hood & backlit display panel
-  const binnacleGeo = track(new THREE.BoxGeometry(0.32, 0.10, 0.14));
-  const binnacle = new THREE.Mesh(binnacleGeo, alcantaraMat);
-  binnacle.position.set(driverX, dashY + 0.095, wheelAnchor.z + 0.19);
-  cockpitGroup.add(binnacle);
-
-  const clusterScreenGeo = track(new THREE.PlaneGeometry(0.24, 0.06));
-  const clusterScreen = new THREE.Mesh(clusterScreenGeo, dashGlowMaterial);
-  clusterScreen.position.set(driverX, dashY + 0.088, wheelAnchor.z + 0.118);
-  clusterScreen.rotation.y = Math.PI; // face backward toward driver (-Z)
-  cockpitGroup.add(clusterScreen);
-
-  // 10-segment live 3D RPM / Shift-light LED bar on top of binnacle
-  const shiftLedMaterials: THREE.MeshStandardMaterial[] = [];
-  const ledGeo = track(new THREE.BoxGeometry(0.018, 0.012, 0.012));
-  const ledSpan = 0.21;
-  for (let i = 0; i < 10; i++) {
-    const colorHex = i < 4 ? '#10B981' : i < 7 ? '#F59E0B' : '#F43F5E';
-    const ledMat = track(
-      new THREE.MeshStandardMaterial({
-        color: '#1E293B',
-        emissive: colorHex,
-        emissiveIntensity: 0,
-        roughness: 0.25,
-      })
-    );
-    shiftLedMaterials.push(ledMat);
-    const led = new THREE.Mesh(ledGeo, ledMat);
-    // In local +X = Left, i=0 starts on left (+ledSpan/2) and sweeps to right (-ledSpan/2)
-    const lx = driverX + ledSpan * 0.5 - (ledSpan * i) / 9;
-    led.position.set(lx, dashY + 0.148, wheelAnchor.z + 0.125);
-    cockpitGroup.add(led);
-  }
-
-  // Brake Lockup / Grip-Limit Warning LED strip on left & right of binnacle
-  const warnGeo = track(new THREE.BoxGeometry(0.026, 0.014, 0.012));
-  for (const sx of [-0.142, 0.142]) {
-    const warnLed = new THREE.Mesh(warnGeo, lockupLedMaterial);
-    warnLed.position.set(driverX + sx, dashY + 0.142, wheelAnchor.z + 0.125);
-    cockpitGroup.add(warnLed);
-  }
-
-  // Steering Column + Rotating 3D Motorsport Steering Wheel
-  const colGeo = track(new THREE.CylinderGeometry(0.028, 0.034, 0.22, 8));
-  colGeo.rotateX(Math.PI / 2);
-  const colMesh = new THREE.Mesh(colGeo, dashMat);
-  colMesh.position.set(driverX, wheelAnchor.y - 0.045, wheelAnchor.z + 0.11);
-  colMesh.rotation.x = 0.24;
-  cockpitGroup.add(colMesh);
-
-  const steeringWheelTiltGroup = new THREE.Group();
-  steeringWheelTiltGroup.position.set(wheelAnchor.x, wheelAnchor.y - 0.025, wheelAnchor.z);
-  steeringWheelTiltGroup.rotation.x = 0.24; // ergonomic tilt toward driver
-  cockpitGroup.add(steeringWheelTiltGroup);
-
-  const steeringWheelPivot = new THREE.Group();
-  steeringWheelPivot.name = 'cockpit_steering_wheel_pivot';
-  steeringWheelTiltGroup.add(steeringWheelPivot);
-
-  const wheelRadius = 0.138;
-  const rimGeo = track(new THREE.TorusGeometry(wheelRadius, 0.015, 8, 22));
-  const rimMesh = new THREE.Mesh(rimGeo, alcantaraMat);
-  steeringWheelPivot.add(rimMesh);
-
-  // Top-center 12-o'clock alignment band (critical visual steering cue!)
-  const bandGeo = track(new THREE.BoxGeometry(0.022, 0.034, 0.034));
-  const bandMesh = new THREE.Mesh(bandGeo, accentMat);
-  bandMesh.position.set(0, wheelRadius, 0);
-  steeringWheelPivot.add(bandMesh);
-
-  // 3-spoke motorsport steering wheel arms & center boss
-  const bossGeo = track(new THREE.CylinderGeometry(0.035, 0.038, 0.028, 10));
-  bossGeo.rotateX(Math.PI / 2);
-  const bossMesh = new THREE.Mesh(bossGeo, darkTrimMat);
-  steeringWheelPivot.add(bossMesh);
-
-  const spokeHGeo = track(new THREE.BoxGeometry(wheelRadius * 1.85, 0.022, 0.012));
-  const spokeH = new THREE.Mesh(spokeHGeo, darkTrimMat);
-  spokeH.position.set(0, -0.01, 0.004);
-  steeringWheelPivot.add(spokeH);
-
-  const spokeVGeo = track(new THREE.BoxGeometry(0.026, wheelRadius * 0.92, 0.012));
-  const spokeV = new THREE.Mesh(spokeVGeo, darkTrimMat);
-  spokeV.position.set(0, -wheelRadius * 0.48, 0.004);
-  steeringWheelPivot.add(spokeV);
-
-  // Windshield A-Pillars + Header Frame + Sleek Interior Rearview Mirror + Side Mirrors
-  const addCockpitPillar = (p1: THREE.Vector3, p2: THREE.Vector3, radius: number) => {
-    const dir = new THREE.Vector3().subVectors(p2, p1);
-    const len = dir.length();
-    const pGeo = track(new THREE.CylinderGeometry(radius, radius, len, 6));
-    const pMesh = new THREE.Mesh(pGeo, dashMat);
-    pMesh.position.copy(p1).add(p2).multiplyScalar(0.5);
-    pMesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
-    cockpitGroup.add(pMesh);
-  };
-
-  const aBaseZ = halfWb * 0.67;
-  const aTopZ = halfWb * 0.24;
-  const aBaseX = cabinInnerW * 0.52;
-  const aTopX = cabinInnerW * 0.46;
-  const aBaseY = dashY + 0.04;
-  const aTopY = roofY + 0.04;
-  addCockpitPillar(
-    new THREE.Vector3(aBaseX, aBaseY, aBaseZ),
-    new THREE.Vector3(aTopX, aTopY, aTopZ),
-    0.015
-  );
-  addCockpitPillar(
-    new THREE.Vector3(-aBaseX, aBaseY, aBaseZ),
-    new THREE.Vector3(-aTopX, aTopY, aTopZ),
-    0.015
-  );
-  addCockpitPillar(
-    new THREE.Vector3(aTopX, aTopY, aTopZ),
-    new THREE.Vector3(-aTopX, aTopY, aTopZ),
-    0.014
-  );
-
-  // Subtle interior rearview mirror tucked high near header
-  const rearMirrorGeo = track(new THREE.BoxGeometry(0.13, 0.028, 0.016));
-  const rearMirror = new THREE.Mesh(rearMirrorGeo, dashMat);
-  rearMirror.position.set(0, roofY - 0.01, aTopZ + 0.08);
-  cockpitGroup.add(rearMirror);
-
-  // Exterior Side Wing Mirrors (gives clear width reference in cockpit & chase)
-  const sideMirrorGeo = track(new THREE.BoxGeometry(0.14, 0.075, 0.09));
-  const sideStalkGeo = track(new THREE.BoxGeometry(0.08, 0.025, 0.04));
-  for (const sx of [-1, 1]) {
-    const stalk = new THREE.Mesh(sideStalkGeo, darkTrimMat);
-    stalk.position.set(sx * (bodyWidth * 0.46), dashY + 0.09, aBaseZ - 0.14);
-    cockpitGroup.add(stalk);
-    const mirror = new THREE.Mesh(sideMirrorGeo, primaryPaintMat);
-    mirror.position.set(sx * (bodyWidth * 0.53), dashY + 0.11, aBaseZ - 0.14);
-    cockpitGroup.add(mirror);
-  }
-
-  const cockpitRig: ICockpitInteriorRig = {
-    group: cockpitGroup,
-    steeringWheelPivot,
-    shiftLedMaterials,
-    lockupLedMaterial,
-    dashGlowMaterial,
-  };
+  const cockpitRig = buildCockpit(compiled, track);
+  cockpitRig.group.visible = false;
+  bodyGroup.add(cockpitRig.group);
 
   if (build.chassis.rollCage !== 'None') {
     const cageMat = registerMat('chassis', {
@@ -949,7 +772,7 @@ export function buildAssembledCar(compiled: ICompiledVehicle): IAssembledCarRig 
   const hlGeo = track(new THREE.BoxGeometry(0.34, 0.085, 0.08));
   for (const sx of [-1, 1]) {
     const hl = new THREE.Mesh(hlGeo, headlightMat);
-    hl.position.set(sx * (bodyWidth * 0.34), bodyStyle === 'prototype' ? 0.44 : 0.50, frontZ - 0.05);
+    hl.position.set(sx * (bodyWidth * 0.34), roadBody?.headlightHeight ?? (bodyStyle === 'prototype' ? 0.44 : 0.50), frontZ - 0.05);
     hl.rotation.y = sx * -0.18;
     bodyGroup.add(hl);
   }
@@ -964,7 +787,7 @@ export function buildAssembledCar(compiled: ICompiledVehicle): IAssembledCarRig 
   );
   const tlGeo = track(new THREE.BoxGeometry(bodyWidth * 0.78, 0.085, 0.06));
   const tlBar = new THREE.Mesh(tlGeo, taillightMaterial);
-  tlBar.position.set(0, bodyStyle === 'prototype' ? 0.54 : 0.62, rearZ + 0.02);
+  tlBar.position.set(0, roadBody?.taillightHeight ?? (bodyStyle === 'prototype' ? 0.54 : 0.62), rearZ + 0.02);
   bodyGroup.add(tlBar);
 
   // =========================================================================
@@ -1110,12 +933,20 @@ export function buildAssembledCar(compiled: ICompiledVehicle): IAssembledCarRig 
     });
   }
 
+  const exteriorGroup = new THREE.Group();
+  exteriorGroup.name = 'vehicle_exterior';
+  for (const child of [...bodyGroup.children]) {
+    if (child !== cockpitRig.group && child !== xrayLinesGroup) exteriorGroup.add(child);
+  }
+  bodyGroup.add(exteriorGroup);
+
   return {
     root,
     bodyGroup,
     cabinMesh,
     roofMesh,
     seatMesh,
+    exteriorGroup,
     cockpitRig,
     bodyShellMaterials,
     xrayLinesGroup,

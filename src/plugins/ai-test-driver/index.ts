@@ -102,7 +102,7 @@ class AiTestDriverController {
       steerCmd = localX >= 0 ? 1 : -1;
     } else {
       const purePursuitAngle = Math.atan2(2 * vehicle.wheelbaseM * localX, distSq);
-      steerCmd = purePursuitAngle / 0.46;
+      steerCmd = purePursuitAngle / (0.46 * (vehicle.steeringLockDeg / 30));
     }
 
     // Yaw & body-slip damping so high-power MR/FR cars don't snap-spin

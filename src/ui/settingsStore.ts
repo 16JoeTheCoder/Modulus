@@ -1,4 +1,5 @@
 import type { AssistPreset, TransmissionMode } from '../contracts/simulation';
+import { STEERING_WHEELS, type SteeringWheelStyle } from './steeringWheels';
 
 export type SpeedUnit = 'mph' | 'kph';
 export type ExtendedCameraPreset = 'cockpit' | 'hood' | 'chase' | 'orbit';
@@ -20,6 +21,7 @@ export interface KeyBindingsConfig {
 export interface PlayerSettings {
   speedUnit: SpeedUnit;
   defaultCamera: ExtendedCameraPreset;
+  steeringWheel: SteeringWheelStyle;
   motionPreset: MotionPreset;
   masterVolume: number;
   engineVolume: number;
@@ -28,6 +30,7 @@ export interface PlayerSettings {
   transmissionMode: TransmissionMode;
   assistPreset: AssistPreset;
   showControlHints: boolean;
+  showTopHud: boolean;
   autoDebriefOnLap: boolean;
   labMode: LabExperienceMode;
   keyBindings: KeyBindingsConfig;
@@ -83,6 +86,7 @@ export const DEFAULT_KEY_BINDINGS: KeyBindingsConfig = {
 export const DEFAULT_PLAYER_SETTINGS: PlayerSettings = {
   speedUnit: 'mph',
   defaultCamera: 'cockpit',
+  steeringWheel: 'road',
   motionPreset: 'standard',
   masterVolume: 0.7,
   engineVolume: 0.85,
@@ -91,6 +95,7 @@ export const DEFAULT_PLAYER_SETTINGS: PlayerSettings = {
   transmissionMode: 'auto',
   assistPreset: 'beginner',
   showControlHints: true,
+  showTopHud: true,
   autoDebriefOnLap: true,
   labMode: 'beginner',
   keyBindings: { ...DEFAULT_KEY_BINDINGS },
@@ -119,6 +124,8 @@ function loadSettingsFromStorage(): PlayerSettings {
   return {
     ...DEFAULT_PLAYER_SETTINGS,
     ...parsed,
+    steeringWheel: parsed.steeringWheel && Object.hasOwn(STEERING_WHEELS, parsed.steeringWheel)
+      ? parsed.steeringWheel : DEFAULT_PLAYER_SETTINGS.steeringWheel,
     keyBindings: {
       ...DEFAULT_KEY_BINDINGS,
       ...(parsed.keyBindings ?? {}),
@@ -192,6 +199,14 @@ export function saveResumableSession(session: ResumableSession): void {
     window.localStorage.setItem(SESSION_KEY, JSON.stringify(session));
   } catch {
     // ignore storage errors
+  }
+}
+
+export function clearResumableSession(): void {
+  try {
+    window.localStorage.removeItem(SESSION_KEY);
+  } catch {
+    // Storage may be unavailable.
   }
 }
 

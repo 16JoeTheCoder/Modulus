@@ -568,7 +568,7 @@ export class PhysicsRapierPlugin implements IModulusPlugin {
         z: dot(worldDir, state.forwardWorld),
       };
       const classified = classifyImpactDamageZone(localDirection);
-      const damageAdd = intensity01 * 0.28;
+      const damageAdd = intensity01 * 0.28 * this.balanceConfig.physics_bias.impact_damage_mult;
       state.damageZones[classified.zoneIndex] = clamp(
         state.damageZones[classified.zoneIndex] + damageAdd,
         0,

@@ -16,7 +16,6 @@ import {
 } from '../../core/types';
 
 const DEG_TO_RAD = Math.PI / 180;
-const MAX_STEER_ANGLE_RAD = 30 * DEG_TO_RAD;
 const WHEEL_SPIN_SUBSTEPS = 8;
 
 const SURFACE_GRIP: Record<SurfaceType, number> = {
@@ -140,10 +139,11 @@ export class VehicleSolverPlugin implements IModulusPlugin {
 
     const steerInput = clamp(input.steer, -1, 1);
     state.commandedSteer = steerInput;
+    const maxSteerAngleRad = vehicle.steeringLockDeg * DEG_TO_RAD;
     const centerSteerRad = clamp(
-      steerInput * MAX_STEER_ANGLE_RAD + steerPullRad,
-      -MAX_STEER_ANGLE_RAD,
-      MAX_STEER_ANGLE_RAD
+      steerInput * maxSteerAngleRad + steerPullRad,
+      -maxSteerAngleRad,
+      maxSteerAngleRad
     );
     let ackFL = 0;
     let ackFR = 0;
@@ -227,6 +227,7 @@ export class VehicleSolverPlugin implements IModulusPlugin {
     const serviceBrakeInput = isReversing ? clamp(input.throttle, 0, 1) : clamp(input.brake, 0, 1);
     const activeDriveIntent = isReversing ? clamp(input.brake, 0, 1) : clamp(input.throttle, 0, 1);
     const handbrakeInput = clamp(input.handbrake, 0, 1);
+    const driftForgiveness = this.balanceConfig.physics_bias.drift_forgiveness;
 
     // Static hold gate for jitter-free stationary rest on slopes & grid
     const lowSpeedBlend = clamp((1.2 - state.speedMs) / 1.0, 0, 1);
@@ -295,7 +296,7 @@ export class VehicleSolverPlugin implements IModulusPlugin {
       let brakeTorqueNm = serviceBrakeTorqueNm;
       if (!isFront && handbrakeInput > 0.01) {
         // Strong hydraulic handbrake locks rear wheels promptly for clean drift initiation
-        brakeTorqueNm += 4200 * handbrakeInput * w.brakeFadeMultiplier;
+        brakeTorqueNm += (4200 - 1600 * driftForgiveness) * handbrakeInput * w.brakeFadeMultiplier;
       }
       w.brakeTorqueNm = brakeTorqueNm;
 
@@ -453,8 +454,8 @@ export class VehicleSolverPlugin implements IModulusPlugin {
       // Handbrake rear-lock kinetic drop breaks rear traction smoothly on command for drift initiation,
       // while soft high-slip rear lateral curvature keeps sustained slides catchable on keyboard.
       const isRearHandbrakeSliding = !isFront && handbrakeInput > 0.12 && state.speedMs > 3.5;
-      const handbrakeLatScale = isRearHandbrakeSliding ? 1 - handbrakeInput * 0.74 : 1.0;
-      const handbrakeLongScale = isRearHandbrakeSliding ? 1 - handbrakeInput * 0.35 : 1.0;
+      const handbrakeLatScale = isRearHandbrakeSliding ? 1 - handbrakeInput * (0.74 - 0.38 * driftForgiveness) : 1.0;
+      const handbrakeLongScale = isRearHandbrakeSliding ? 1 - handbrakeInput * (0.35 - 0.13 * driftForgiveness) : 1.0;
       const latPacejkaC = !isFront ? Math.min(1.28, vehicle.pacejkaC) : vehicle.pacejkaC;
       const latPacejkaE = !isFront ? Math.min(-0.45, vehicle.pacejkaE) : vehicle.pacejkaE;
 

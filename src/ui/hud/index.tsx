@@ -5,6 +5,7 @@ import {
   Bot,
   Camera,
   Cloud,
+  EyeOff,
   Flame,
   Fuel,
   RotateCcw,
@@ -56,6 +57,7 @@ export interface IDriveHudProps {
   onBackToGarage: () => void;
   onOpenLab: () => void;
   onOpenSettings: () => void;
+  onFinishDrift?: () => void;
   onOpenLastDebrief?: () => void;
   onTelemetryPeaks?: (peaks: { peakLockup: number; peakScrub: number }) => void;
 }
@@ -99,6 +101,7 @@ export function DriveHud({
   onBackToGarage,
   onOpenLab,
   onOpenSettings,
+  onFinishDrift,
   onOpenLastDebrief,
   onTelemetryPeaks,
 }: IDriveHudProps) {
@@ -286,7 +289,7 @@ export function DriveHud({
   return (
     <div className="pointer-events-none fixed inset-0 z-10 flex h-[100dvh] flex-col justify-between overflow-hidden select-none">
       {/* SAFE-AREA TOP BAR */}
-      <div
+      {settings.showTopHud && <div
         className="pointer-events-auto flex flex-wrap items-center justify-between gap-2 px-3 md:px-4"
         style={{ paddingTop: 'var(--safe-top)' }}
       >
@@ -367,6 +370,12 @@ export function DriveHud({
             <span className="hidden md:inline">Settings</span>
           </button>
 
+          <button type="button" onClick={() => updatePlayerSettings({ showTopHud: false })}
+            title="Clear the windshield by hiding the top HUD"
+            className="flex items-center gap-1.5 rounded-lg border border-slate-700 bg-[#0A0C10]/80 px-2.5 py-1.5 text-xs font-semibold text-slate-200 hover:border-cyan-400">
+            <EyeOff className="h-3.5 w-3.5 text-cyan-400" /> Hide top HUD
+          </button>
+
           <button
             type="button"
             onClick={toggleTouchHud}
@@ -391,10 +400,10 @@ export function DriveHud({
             </span>
           </button>
         </div>
-      </div>
+      </div>}
 
       {/* CENTER-TOP FEEDBACK BANNERS (Lap Toast, Sector Split, Standstill/Reverse Cue) */}
-      {!debriefOpen && sessionMode !== 'drift' && (
+      {settings.showTopHud && !debriefOpen && sessionMode !== 'drift' && (
         <div className="pointer-events-none fixed top-16 left-1/2 z-30 flex -translate-x-1/2 flex-col items-center gap-1.5">
           {lapToast && (
             <div className="pointer-events-auto flex items-center gap-3 rounded-xl border border-cyan-400/60 bg-[#0A0C10]/90 px-4 py-2.5 shadow-[0_0_24px_rgba(0,240,255,0.25)] backdrop-blur-md">
@@ -462,7 +471,7 @@ export function DriveHud({
       )}
 
       {/* MIDDLE ROW: TIMING TOWER (LEFT) + ALERTS (RIGHT) */}
-      <div className="flex flex-1 items-start justify-between px-3 pt-2 md:px-4">
+      {settings.showTopHud && <div className="flex flex-1 items-start justify-between px-3 pt-2 md:px-4">
         {/* Motorsport Timing Tower */}
         <div className="w-52 rounded-xl border border-slate-800/90 bg-[#0A0C10]/78 p-2.5 backdrop-blur-md">
           <div className="flex items-center justify-between gap-1 border-b border-slate-800 pb-1.5">
@@ -592,11 +601,20 @@ export function DriveHud({
             </div>
           )}
         </div>
-      </div>
+      </div>}
+
+      {!settings.showTopHud && !debriefOpen && (
+        <div className={`pointer-events-auto absolute right-3 z-20 flex flex-wrap justify-end gap-1.5 ${touchHudEnabled ? 'bottom-64' : 'bottom-[calc(var(--safe-bottom)+7rem)]'}`}>
+          {onFinishDrift && <button type="button" onClick={onFinishDrift}
+            className="rounded-lg border border-fuchsia-500/60 bg-slate-950/85 px-2.5 py-1.5 text-xs font-semibold text-fuchsia-200">Finish run</button>}
+          <button type="button" onClick={() => updatePlayerSettings({ showTopHud: true })}
+            className="rounded-lg border border-slate-700 bg-slate-950/85 px-2.5 py-1.5 text-xs font-semibold text-slate-200">Show top HUD</button>
+        </div>
+      )}
 
       {/* BOTTOM TELEMETRY CLUSTER */}
       <div
-        className={`flex flex-wrap items-end justify-between gap-3 px-3 md:px-4 ${
+        className={`mt-auto flex flex-wrap items-end justify-between gap-3 px-3 md:px-4 ${
           touchHudEnabled ? 'mb-36 sm:mb-28' : ''
         }`}
         style={{ paddingBottom: touchHudEnabled ? '0px' : 'var(--safe-bottom)' }}
