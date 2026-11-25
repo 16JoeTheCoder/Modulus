@@ -8,10 +8,60 @@ export interface IDualEnvironmentRig {
   setMode(mode: VisualMode, scene: THREE.Scene, track: ITrackSplineSchema): void;
   updateTrackTheme(track: ITrackSplineSchema, scene: THREE.Scene, activeMode: VisualMode): void;
   updateTrackFollow(carPos: THREE.Vector3, camPos: THREE.Vector3): void;
+  /** Computes recommended camera far plane (m) for the track's spatial span (short vs endurance). */
+  getRecommendedCameraFar(track: ITrackSplineSchema): number;
   dispose(scene: THREE.Scene): void;
 }
 
 const LAB_BG_COLOR = new THREE.Color('#0A0C10');
+const SKY_DOME_BASE_RADIUS = 1000;
+
+/**
+ * Computes the horizontal + vertical bounding span of a track's control points (meters).
+ * Short courses (~400-700 m span) keep tight fog/far planes; endurance routes (2-4 km span)
+ * automatically expand sight lines to 4,500+ m far / 4,000+ m sky / 2,200+ m fog without hurting short-course FPS.
+ */
+export function computeTrackSightProfile(track: ITrackSplineSchema): {
+  spanM: number;
+  cameraFarM: number;
+  skyRadiusM: number;
+  fogNearM: number;
+  fogFarM: number;
+} {
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minZ = Infinity;
+  let maxZ = -Infinity;
+  for (const cp of track.controlPoints) {
+    if (cp.x < minX) minX = cp.x;
+    if (cp.x > maxX) maxX = cp.x;
+    if (cp.z < minZ) minZ = cp.z;
+    if (cp.z > maxZ) maxZ = cp.z;
+  }
+  const spanM =
+    Number.isFinite(minX) && Number.isFinite(maxX)
+      ? Math.hypot(maxX - minX, maxZ - minZ)
+      : 600;
+
+  if (spanM <= 1500) {
+    // Short courses: preserve exact warm haze (155..860 m) and tight far plane for zero FPS hit
+    return {
+      spanM,
+      cameraFarM: 2800,
+      skyRadiusM: 2200,
+      fogNearM: 155,
+      fogFarM: 860,
+    };
+  }
+
+  // Long rally / endurance routes (e.g. Tanjung Coast, Telaga Ridge, Basalt Highlands ~3.8 km bbox)
+  const cameraFarM = Math.max(4800, Math.ceil(spanM * 1.45));
+  const skyRadiusM = Math.max(4200, Math.min(cameraFarM * 0.88, Math.ceil(spanM * 1.2)));
+  const fogFarM = Math.max(2400, Math.min(3400, Math.ceil(spanM * 0.72)));
+  const fogNearM = 260;
+
+  return { spanM, cameraFarM, skyRadiusM, fogNearM, fogFarM };
+}
 
 function createSkyDome(
   zenithHex: string,
@@ -26,7 +76,7 @@ function createSkyDome(
     uSunDir: { value: new THREE.Vector3(0.55, 0.52, 0.65).normalize() },
   };
 
-  const geo = new THREE.SphereGeometry(1150, 24, 16);
+  const geo = new THREE.SphereGeometry(SKY_DOME_BASE_RADIUS, 24, 16);
   const mat = new THREE.ShaderMaterial({
     uniforms,
     side: THREE.BackSide,
@@ -262,9 +312,12 @@ export function buildDualEnvironmentRig(
     (skyDome.uniforms.uHorizon.value as THREE.Color).set(track.skyHorizonHex);
     (skyDome.uniforms.uSunColor.value as THREE.Color).set(track.sunColorHex);
 
+    const sight = computeTrackSightProfile(track);
+    skyDome.mesh.scale.setScalar(sight.skyRadiusM / SKY_DOME_BASE_RADIUS);
+
     if (activeMode === 'track') {
       targetScene.background = new THREE.Color(track.skyHorizonHex);
-      targetScene.fog = new THREE.Fog(track.skyHorizonHex, 155, 860);
+      targetScene.fog = new THREE.Fog(track.skyHorizonHex, sight.fogNearM, sight.fogFarM);
     }
   };
 
@@ -272,6 +325,9 @@ export function buildDualEnvironmentRig(
     labGroup,
     trackGroup,
     sunLight,
+    getRecommendedCameraFar(track) {
+      return computeTrackSightProfile(track).cameraFarM;
+    },
     setMode(mode, targetScene, track) {
       const isLab = mode === 'lab';
       labGroup.visible = isLab;

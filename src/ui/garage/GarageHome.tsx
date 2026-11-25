@@ -34,6 +34,7 @@ import {
   type PlayerSettings,
 } from '../settingsStore';
 import { CURRENT_RULESET_VERSION } from '../../contracts/simulation';
+import { TrackPreviewSvg } from '../lab/TrackPreviewSvg';
 
 export interface IGarageHomeProps {
   engine: ModulusEngine;
@@ -458,8 +459,8 @@ export function GarageHome({
                   </div>
                 </div>
 
-                {/* Course Best Card */}
-                <div className="rounded-xl border border-slate-800 bg-slate-900/65 p-3">
+                {/* Course Best & Route Preview Card */}
+                <div className="space-y-2 rounded-xl border border-slate-800 bg-slate-900/65 p-3">
                   <div className="flex items-center justify-between">
                     <span className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-300">
                       <Flag className="h-3.5 w-3.5 text-cyan-400" />
@@ -469,13 +470,14 @@ export function GarageHome({
                       {activeTrack.difficulty}
                     </span>
                   </div>
-                  <div className="mt-2 flex items-center justify-between font-mono text-xs">
+                  <TrackPreviewSvg track={activeTrack} showElevation={false} />
+                  <div className="flex items-center justify-between font-mono text-xs">
                     <span className="text-slate-400">Personal Best</span>
                     <span className="font-bold text-cyan-300">
                       {trackPb.bestLapTimeMs !== null ? formatTime(trackPb.bestLapTimeMs) : '--:--.---'}
                     </span>
                   </div>
-                  <div className="mt-1 flex items-center justify-between font-mono text-[10px] text-slate-400">
+                  <div className="flex items-center justify-between font-mono text-[10px] text-slate-400">
                     <span>Gold Target</span>
                     <span>{formatTime(activeTrack.targetGoldTimeMs)}</span>
                   </div>
@@ -536,6 +538,7 @@ export function GarageHome({
               [
                 { id: 'practice', label: 'Practice' },
                 { id: 'time_trial', label: 'Time Trial' },
+                { id: 'drift', label: 'Drift' },
               ] as const
             ).map((m) => (
               <button
@@ -544,7 +547,9 @@ export function GarageHome({
                 onClick={() => onChangeSessionMode(m.id)}
                 className={`rounded-md px-2.5 py-1 transition ${
                   sessionMode === m.id
-                    ? 'bg-cyan-500/20 text-cyan-200'
+                    ? m.id === 'drift'
+                      ? 'bg-fuchsia-500/25 text-fuchsia-200'
+                      : 'bg-cyan-500/20 text-cyan-200'
                     : 'text-slate-400 hover:text-white'
                 }`}
               >

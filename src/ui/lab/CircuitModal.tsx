@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Bot, Flag, MapPin, Play, Trophy, X } from 'lucide-react';
+import { Bot, Flag, Flame, MapPin, Play, Trophy, X } from 'lucide-react';
 import { TRACKS_CATALOG } from '../../content';
 import type { ModulusEngine } from '../../core/Engine';
 import type { StorageSync } from '../../core/StorageSync';
 import type { ILapLeaderboardEntry, ITrackSplineSchema } from '../../core/types';
+import { TrackPreviewSvg } from './TrackPreviewSvg';
 
 interface CircuitModalProps {
   open: boolean;
@@ -13,7 +14,7 @@ interface CircuitModalProps {
   activeTrackId: string;
   balanceVersionId: string;
   onSelectTrack: (trackId: string) => void;
-  onLaunchDrive: (aiEnabled: boolean) => void;
+  onLaunchDrive: (aiEnabled: boolean, modeOverride?: 'practice' | 'time_trial' | 'drift') => void;
 }
 
 export function formatLapTime(ms: number): string {
@@ -102,24 +103,54 @@ export function CircuitModal({
                       : 'border-slate-800 bg-[#101622] hover:border-slate-600'
                   }`}
                 >
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <div className="text-sm font-bold text-white">{track.name}</div>
-                      <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-slate-400">
-                        <MapPin className="h-3 w-3 text-slate-500" />
-                        <span>{track.country}</span>
-                        <span>•</span>
-                        <span>{track.ambientTempC}°C Air / {track.trackTempC}°C Track</span>
+                  <div className="flex items-start gap-3">
+                    <TrackPreviewSvg
+                      track={track}
+                      compact
+                      showElevation={false}
+                      className="shrink-0"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="truncate text-sm font-bold text-white">
+                              {track.name}
+                            </span>
+                            {track.courseTags?.map((tag) => (
+                              <span
+                                key={tag}
+                                className={`rounded px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase ${
+                                  tag === 'drift'
+                                    ? 'bg-fuchsia-500/20 text-fuchsia-300 ring-1 ring-fuchsia-500/40'
+                                    : 'bg-slate-800 text-slate-300'
+                                }`}
+                              >
+                                {tag.replace('_', ' ')}
+                              </span>
+                            ))}
+                          </div>
+                          <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-slate-400">
+                            <MapPin className="h-3 w-3 shrink-0 text-slate-500" />
+                            <span className="truncate">{track.country}</span>
+                            <span>•</span>
+                            <span>
+                              {track.ambientTempC}°C / {track.trackTempC}°C
+                            </span>
+                          </div>
+                        </div>
+                        <span
+                          className={`shrink-0 rounded border px-2 py-0.5 text-[10px] font-semibold uppercase ${diffColor}`}
+                        >
+                          {track.difficulty}
+                        </span>
                       </div>
-                    </div>
-                    <span className={`rounded border px-2 py-0.5 text-[10px] font-semibold uppercase ${diffColor}`}>
-                      {track.difficulty}
-                    </span>
-                  </div>
 
-                  <p className="mt-2 text-xs leading-relaxed text-slate-400">
-                    {track.description}
-                  </p>
+                      <p className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-slate-400">
+                        {track.description}
+                      </p>
+                    </div>
+                  </div>
 
                   <div className="mt-3 grid grid-cols-4 gap-1.5 font-mono text-[10px]">
                     <div className="rounded bg-slate-900/90 px-2 py-1">
@@ -144,9 +175,11 @@ export function CircuitModal({
             })}
           </div>
 
-          {/* Right: Partitioned Cloud Leaderboard */}
-          <div className="flex flex-col rounded-xl border border-slate-800 bg-[#0E131E] p-3.5">
-            <div className="mb-3 flex items-center justify-between">
+          {/* Right: Live Route Preview + Elevation Profile + Partitioned Leaderboard */}
+          <div className="flex flex-col gap-3 rounded-xl border border-slate-800 bg-[#0E131E] p-3.5">
+            <TrackPreviewSvg track={activeTrack} showElevation showLegend />
+
+            <div className="flex items-center justify-between border-t border-slate-800/80 pt-2.5">
               <div className="flex items-center gap-2">
                 <Trophy className="h-4 w-4 text-amber-400" />
                 <span className="text-xs font-bold uppercase tracking-wider text-slate-200">
@@ -217,14 +250,25 @@ export function CircuitModal({
           <div className="text-xs text-slate-400">
             Selected: <span className="font-semibold text-white">{activeTrack.name}</span>
           </div>
-          <div className="flex items-center gap-2.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                onClose();
+                onLaunchDrive(false, 'drift');
+              }}
+              className="flex items-center gap-1.5 rounded-lg border border-fuchsia-500/50 bg-fuchsia-500/15 px-3 py-2 text-xs font-bold uppercase tracking-wider text-fuchsia-200 transition hover:bg-fuchsia-500/25"
+            >
+              <Flame className="h-3.5 w-3.5" />
+              Drift Session
+            </button>
             <button
               type="button"
               onClick={() => {
                 onClose();
                 onLaunchDrive(true);
               }}
-              className="flex items-center gap-1.5 rounded-lg border border-amber-500/50 bg-amber-500/15 px-3.5 py-2 text-xs font-bold uppercase tracking-wider text-amber-300 transition hover:bg-amber-500/25"
+              className="flex items-center gap-1.5 rounded-lg border border-amber-500/50 bg-amber-500/15 px-3 py-2 text-xs font-bold uppercase tracking-wider text-amber-300 transition hover:bg-amber-500/25"
             >
               <Bot className="h-3.5 w-3.5" />
               AI Test Benchmark

@@ -112,6 +112,10 @@ class FxRendererController implements IModulusPlugin {
       ctx.events.on('track:selected', ({ schema }) => {
         if (this.envRig && this.ctx) {
           this.envRig.updateTrackTheme(schema, this.ctx.scene, this.ctx.getVisualMode());
+          if (this.ctx.getVisualMode() === 'track') {
+            this.ctx.camera.far = this.envRig.getRecommendedCameraFar(schema);
+            this.ctx.camera.updateProjectionMatrix();
+          }
         }
         this.surfaceFx?.clear();
         this.chaseInitialized = false;
@@ -208,10 +212,12 @@ class FxRendererController implements IModulusPlugin {
       this.targetOrbitPitch = 0.27;
       this.smoothedFov = 46;
       this.ctx.camera.fov = 46;
+      this.ctx.camera.far = 2400;
       this.ctx.camera.updateProjectionMatrix();
     } else {
       this.smoothedFov = 58;
       this.ctx.camera.fov = 58;
+      this.ctx.camera.far = this.envRig.getRecommendedCameraFar(this.ctx.getActiveTrack());
       this.ctx.camera.updateProjectionMatrix();
     }
   }
