@@ -36,11 +36,11 @@ interface IExtendedEngineApi {
   getKeyBindings?: () => KeyBindingsConfig;
 }
 
-interface IExtendedCompiledVehicle extends ICompiledVehicle {
+type IExtendedCompiledVehicle = ICompiledVehicle & {
   cockpitEyeLocal?: Vec3;
   steeringWheelLocal?: Vec3;
   hoodCamLocal?: Vec3;
-}
+};
 
 const ZERO_DAMAGE: DamageZoneTuple = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 

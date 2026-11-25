@@ -7,7 +7,7 @@
     "starterUnlocked": true,
     "defaultDrivetrain": "FR",
     "supportedDrivetrains": ["FR", "AWD", "FF"],
-    "baseMassKg": 820,
+    "baseMassKg": 775,
     "baseCgHeightM": 0.46,
     "baseWheelbaseM": 2.57,
     "baseTrackWidthM": 1.68,
