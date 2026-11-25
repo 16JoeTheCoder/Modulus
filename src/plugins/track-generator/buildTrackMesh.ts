@@ -11,6 +11,10 @@ import {
 } from '../../core/math/spline';
 import type { ITrackGeometryData, ITrackSplineSchema, Vec3 } from '../../core/types';
 import { buildTrackCollision } from './buildTrackCollision';
+import {
+  extractCrestAndDownhillBrakingZones,
+  extractSurfaceTransitions,
+} from './trackPreview';
 
 export interface ITrackGeometryDataV2 extends ITrackGeometryData {
   collisionHandle: ITrackCollisionHandle;
@@ -305,6 +309,10 @@ export function buildTrackBundle(schema: ITrackSplineSchema): IBuiltTrackBundle 
           const row = i === 0 ? 0 : 1;
           const isWhite = (lane + row) % 2 === 0;
           tmpColor.copy(isWhite ? whitePaint : checkerDark);
+          pushQuadNonIndexed(roadPos, roadCol, p00, p01, p10, p11, tmpColor);
+        } else if (s0.surface !== s1.surface) {
+          // Crisp readable surface transition apron strip (e.g. tarmac <-> gravel)
+          tmpColor.copy(asphaltBase).lerp(gravelBase, 0.5).lerp(sector1Amber, 0.25);
           pushQuadNonIndexed(roadPos, roadCol, p00, p01, p10, p11, tmpColor);
         } else if (sectorStripeColor) {
           // Crisp painted sector timing line matching sector gantry accent
@@ -764,9 +772,13 @@ export function buildTrackBundle(schema: ITrackSplineSchema): IBuiltTrackBundle 
   root.add(buildGantry(spline.sampleAtProgress(schema.sectorFractions[1]), false, '#00F0FF'));
 
   // =========================================================================
-  // 6. BRAKE DISTANCE MARKER BOARDS (Outside barriers approaching heavy bends)
+  // 6. BRAKE DISTANCE, CREST WARNING & SURFACE TRANSITION BOARDS (Outside barriers)
   // =========================================================================
-  const brakeBoardPositions: Array<{ sample: ISplineSample; side: -1 | 1; distM: 100 | 50 }> = [];
+  const brakeBoardPositions: Array<{
+    sample: ISplineSample;
+    side: -1 | 1;
+    kind: '100' | '50' | 'crest' | 'surface';
+  }> = [];
   let lastBrakeCornerDist = -200;
   for (let i = 0; i < n; i++) {
     const s = samples[i];
@@ -781,8 +793,41 @@ export function buildTrackBundle(schema: ITrackSplineSchema): IBuiltTrackBundle 
     const outsideSide: -1 | 1 = s.signedCurvature >= 0 ? -1 : 1;
     for (const distM of [100, 50] as const) {
       const markerSample = spline.sampleAtProgress(spline.progressAtDistance(s.distanceM - distM));
-      brakeBoardPositions.push({ sample: markerSample, side: outsideSide, distM });
+      brakeBoardPositions.push({
+        sample: markerSample,
+        side: outsideSide,
+        kind: distM === 100 ? '100' : '50',
+      });
     }
+  }
+
+  // Add blind-crest & steep downhill braking boards (e.g. Teras Switchback)
+  const hazards = extractCrestAndDownhillBrakingZones(spline);
+  for (const h of hazards) {
+    if (h.kind === 'blind_crest') {
+      // Crest warning boards on both sides 45 m before the crest
+      const crestApproach = spline.sampleAtProgress(spline.progressAtDistance(h.distanceM - 45));
+      brakeBoardPositions.push({ sample: crestApproach, side: -1, kind: 'crest' });
+      brakeBoardPositions.push({ sample: crestApproach, side: 1, kind: 'crest' });
+    } else {
+      // Downhill braking 100/50 boards on the outside of the turn
+      for (const distM of [85, 45] as const) {
+        const ms = spline.sampleAtProgress(spline.progressAtDistance(h.distanceM - distM));
+        brakeBoardPositions.push({
+          sample: ms,
+          side: h.outsideSide,
+          kind: distM === 85 ? '100' : '50',
+        });
+      }
+    }
+  }
+
+  // Add readable surface-transition boards 30 m ahead of tarmac <-> gravel boundaries
+  const surfaceTransitions = extractSurfaceTransitions(spline);
+  for (const st of surfaceTransitions) {
+    const approach = spline.sampleAtProgress(spline.progressAtDistance(st.distanceM - 30));
+    brakeBoardPositions.push({ sample: approach, side: -1, kind: 'surface' });
+    brakeBoardPositions.push({ sample: approach, side: 1, kind: 'surface' });
   }
 
   if (brakeBoardPositions.length > 0) {
@@ -796,6 +841,17 @@ export function buildTrackBundle(schema: ITrackSplineSchema): IBuiltTrackBundle 
     );
     const board50Mat = trackDisposable(
       new THREE.MeshStandardMaterial({ color: '#F59E0B', roughness: 0.45 })
+    );
+    const boardCrestMat = trackDisposable(
+      new THREE.MeshStandardMaterial({
+        color: '#EF4444',
+        emissive: '#EF4444',
+        emissiveIntensity: 0.15,
+        roughness: 0.45,
+      })
+    );
+    const boardSurfaceMat = trackDisposable(
+      new THREE.MeshStandardMaterial({ color: '#D97706', roughness: 0.55 })
     );
     const stripeMat = trackDisposable(
       new THREE.MeshStandardMaterial({ color: '#0F172A', roughness: 0.5 })
@@ -819,12 +875,20 @@ export function buildTrackBundle(schema: ITrackSplineSchema): IBuiltTrackBundle 
       post.position.set(0, 0.7, 0);
       boardGroup.add(post);
 
-      const board = new THREE.Mesh(boardGeo, m.distM === 100 ? board100Mat : board50Mat);
+      const mat =
+        m.kind === '100'
+          ? board100Mat
+          : m.kind === '50'
+          ? board50Mat
+          : m.kind === 'crest'
+          ? boardCrestMat
+          : boardSurfaceMat;
+      const board = new THREE.Mesh(boardGeo, mat);
       board.position.set(0, 1.45, 0);
       board.castShadow = true;
       boardGroup.add(board);
 
-      const stripes = m.distM === 100 ? 2 : 1;
+      const stripes = m.kind === '100' || m.kind === 'crest' ? 2 : 1;
       for (let st = 0; st < stripes; st++) {
         const bar = new THREE.Mesh(stripeGeo, stripeMat);
         bar.position.set(0, 1.45 + (stripes === 2 ? (st === 0 ? 0.14 : -0.14) : 0), 0);

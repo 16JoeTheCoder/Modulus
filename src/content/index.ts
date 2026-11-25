@@ -9,6 +9,8 @@ import coolingPartsData from './parts/cooling.json';
 
 import switchyardSprintData from './tracks/switchyard_sprint.json';
 import dockyardDriftParkData from './tracks/dockyard_drift_park.json';
+import copperCreekCrossData from './tracks/copper_creek_cross.json';
+import terasSwitchbackData from './tracks/teras_switchback.json';
 import gpCircuitData from './tracks/gp_circuit.json';
 import mountainPassData from './tracks/mountain_pass.json';
 import ovalTestData from './tracks/oval_test.json';
@@ -39,6 +41,8 @@ export const TRACKS_CATALOG: ITrackSplineSchema[] = [
  */
 export const STAGED_TRACKS: ITrackSplineSchema[] = [
   dockyardDriftParkData as unknown as ITrackSplineSchema,
+  copperCreekCrossData as unknown as ITrackSplineSchema,
+  terasSwitchbackData as unknown as ITrackSplineSchema,
 ];
 
 export const PARTS_BY_ID = new Map<string, IPartSchema>(

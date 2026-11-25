@@ -1,0 +1,90 @@
+{
+  "id": "track_mountain_teras_switchback",
+  "trackVersion": "v1.0.0",
+  "name": "Teras Switchback",
+  "country": "Indonesia",
+  "description": "A tight hillside loop climbs to a crest, switches back and drops through alternating bends. Set up passes before braking zones where the road opens.",
+  "difficulty": "Pro",
+  "courseTags": ["race", "rally"],
+  "suggestedLaps": 5,
+  "baseLapRewardCredits": 3600,
+  "targetGoldTimeMs": 94000,
+  "targetSilverTimeMs": 108000,
+  "targetBronzeTimeMs": 128000,
+  "ambientTempC": 18,
+  "trackTempC": 24,
+  "defaultWidthM": 10.2,
+  "skyZenithHex": "#3D7992",
+  "skyHorizonHex": "#D5E0D3",
+  "sunColorHex": "#FFECD1",
+  "groundColorHex": "#4F7552",
+  "treeDensity": 0.7,
+  "rockDensity": 0.44,
+  "closed": true,
+  "sectorFractions": [
+    0.304348,
+    0.652174
+  ],
+  "sectors": [
+    {
+      "index": 0,
+      "name": "Terrace Climb",
+      "startT": 0,
+      "endT": 0.304348,
+      "surface": "tarmac"
+    },
+    {
+      "index": 1,
+      "name": "Blind Crest",
+      "startT": 0.304348,
+      "endT": 0.652174,
+      "surface": "tarmac"
+    },
+    {
+      "index": 2,
+      "name": "Lower Hairpins",
+      "startT": 0.652174,
+      "endT": 1,
+      "surface": "tarmac"
+    }
+  ],
+  "passingZones": [
+    {
+      "id": "pz_teras_main_straight",
+      "name": "Main Straight Approach",
+      "startT": 0.956522,
+      "endT": 0.086957
+    },
+    {
+      "id": "pz_teras_lower_approach",
+      "name": "Lower Hairpins Wide Approach",
+      "startT": 0.652174,
+      "endT": 0.739130
+    }
+  ],
+  "controlPoints": [
+    { "x": 0, "y": 12, "z": 0, "widthM": 12, "bankDeg": 0 },
+    { "x": 0, "y": 12, "z": 121, "widthM": 12, "bankDeg": 0 },
+    { "x": 65, "y": 17, "z": 208, "widthM": 11, "bankDeg": 2 },
+    { "x": 28, "y": 23, "z": 304, "widthM": 10, "bankDeg": -2 },
+    { "x": 61, "y": 30, "z": 388, "widthM": 10, "bankDeg": 2 },
+    { "x": 149, "y": 38, "z": 415, "widthM": 10, "bankDeg": 2 },
+    { "x": 191, "y": 46, "z": 471, "widthM": 10, "bankDeg": -2 },
+    { "x": 264, "y": 53, "z": 498, "widthM": 10, "bankDeg": 2 },
+    { "x": 310, "y": 56, "z": 449, "widthM": 10, "bankDeg": 3 },
+    { "x": 284, "y": 54, "z": 389, "widthM": 10, "bankDeg": 3 },
+    { "x": 206, "y": 50, "z": 351, "widthM": 9.5, "bankDeg": -2 },
+    { "x": 233, "y": 45, "z": 279, "widthM": 9.5, "bankDeg": -2 },
+    { "x": 311, "y": 39, "z": 269, "widthM": 10.5, "bankDeg": 2 },
+    { "x": 379, "y": 35, "z": 297, "widthM": 10, "bankDeg": 2 },
+    { "x": 433, "y": 29, "z": 238, "widthM": 11, "bankDeg": 3 },
+    { "x": 407, "y": 24, "z": 153, "widthM": 11.5, "bankDeg": 2 },
+    { "x": 319, "y": 19, "z": 128, "widthM": 11, "bankDeg": 2 },
+    { "x": 264, "y": 15, "z": 41, "widthM": 10, "bankDeg": 2 },
+    { "x": 177, "y": 13, "z": 32, "widthM": 10, "bankDeg": -2 },
+    { "x": 151, "y": 12, "z": -66, "widthM": 10.5, "bankDeg": 2 },
+    { "x": 75, "y": 12, "z": -96, "widthM": 11, "bankDeg": 2 },
+    { "x": 15, "y": 12, "z": -69, "widthM": 12, "bankDeg": 1 },
+    { "x": 0, "y": 12, "z": -37, "widthM": 12, "bankDeg": 0 }
+  ]
+}
