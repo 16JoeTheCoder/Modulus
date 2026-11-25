@@ -4,11 +4,15 @@ import { buildTrackBundle, type IBuiltTrackBundle } from './buildTrackMesh';
 export { buildTrackCollision, type IBuiltTrackCollision } from './buildTrackCollision';
 export {
   buildTrackPreviewData,
+  extractCrestAndDownhillBrakingZones,
+  extractSurfaceTransitions,
   validateTrackGeometry,
   type ITrackElevationPoint,
   type ITrackGeometryCheckResult,
+  type ITrackHazardMarkerMeta,
   type ITrackPreviewData,
   type ITrackPreviewPoint2D,
+  type ITrackSurfaceTransitionMeta,
 } from './trackPreview';
 export { buildTrackBundle, type IBuiltTrackBundle, type ITrackGeometryDataV2 } from './buildTrackMesh';
 
