@@ -19,6 +19,7 @@ import {
 import { EventBus } from './EventBus';
 import { compileVehicleBuild } from './math/vehicleCompiler';
 import { PluginRegistry } from './PluginRegistry';
+import { LapSectorTimer } from './timing';
 import {
   DEFAULT_BALANCE_CONFIG,
   DEFAULT_KEY_BINDINGS,
@@ -247,6 +248,7 @@ export class ModulusEngine implements IEngineContext {
   private sectorStartTimeMs = 0;
   private bestSectorTimesMs: Array<number | null> = [null, null, null];
   private invalidReasons: LapInvalidationReason[] = [];
+  private lapTimer: LapSectorTimer | null = null;
 
   constructor(initialPlugins: IModulusPlugin[] = []) {
     const starterBuild = createStarterBuild();
@@ -492,6 +494,63 @@ export class ModulusEngine implements IEngineContext {
     if (!geom) return;
 
     const st = this.runtimeState;
+    if (this.lapTimer) {
+      // While unarmed on the standing grid, use horizontal speed so initial vertical suspension settle doesn't start the clock.
+      const planarSpeedMs = Math.hypot(st.linearVelocityWorld.x, st.linearVelocityWorld.z);
+      const res = this.lapTimer.stepVehicle({
+        tick: this.simTick,
+        dt,
+        vehicleId: st.vehicleId,
+        position: st.position,
+        speedMs: st.lapArmed ? st.speedMs : planarSpeedMs,
+        forwardSpeedMs: st.forwardSpeedMs,
+        throttle: this.activeInput.throttle,
+        buildId: this.compiledVehicle.build.id,
+        buildSchemaVersion: normalizeBuildSchemaVersion(this.compiledVehicle.build.buildSchemaVersion),
+        chassisId: this.compiledVehicle.build.chassisId,
+        pwrRatio: this.compiledVehicle.pwrRatioHpPerKg,
+        isAiAssisted: st.aiEnabled,
+      });
+
+      const ts = res.state;
+      st.splineProgress = ts.splineProgress;
+      st.lapArmed = ts.lapArmed;
+      st.currentLap = ts.lapNumber;
+      st.currentSector = ts.sectorIndex;
+      st.currentLapTimeMs = ts.currentLapTimeMs;
+      st.lastLapTimeMs = ts.lastLapTimeMs;
+      st.bestLapTimeMs = ts.bestLapTimeMs;
+      st.lapDeltaMs = ts.lapDeltaMs;
+      st.sectorTimesMs = [
+        ts.sectorTimesMs[0] ?? 0,
+        ts.sectorTimesMs[1] ?? 0,
+        ts.sectorTimesMs[2] ?? 0,
+      ];
+      st.peakLapSpeedKph = ts.peakSpeedKph;
+      st.offTrackCount = ts.offTrackTicks;
+      st.lapValid = ts.lapValid;
+      st.checkpointMask = ts.checkpointMask;
+
+      for (const inv of res.lapInvalidated) {
+        this.events.emit('lap:invalidated', inv);
+      }
+      for (const split of res.sectorSplits) {
+        this.events.emit('sector:split', split);
+      }
+      if (res.lapFinished) {
+        const lf = res.lapFinished;
+        this.events.emit('lap:finished', {
+          ...lf,
+          sectorTimesMs: [
+            lf.sectorTimesMs[0] ?? 0,
+            lf.sectorTimesMs[1] ?? 0,
+            lf.sectorTimesMs[2] ?? 0,
+          ] as [number, number, number],
+        });
+      }
+      return;
+    }
+
     const prevProgress = st.splineProgress;
     const closest = geom.spline.findClosestSample(st.position, prevProgress);
     const nextProgress = closest.sample.t;
@@ -708,6 +767,10 @@ export class ModulusEngine implements IEngineContext {
     this.assists = { ...this.assists, ...partial };
     this.runtimeState.transmissionMode = this.assists.transmissionMode;
     this.runtimeState.assistPreset = this.assists.assistPreset;
+    this.lapTimer?.setRuleset({
+      assistPreset: this.assists.assistPreset,
+      transmissionMode: this.assists.transmissionMode,
+    });
     this.events.emit('assists:changed', { ...this.assists });
   }
 
@@ -750,6 +813,7 @@ export class ModulusEngine implements IEngineContext {
 
   public setBalanceConfig(config: IGlobalBalanceConfig): void {
     this.balanceConfig = config;
+    this.lapTimer?.setRuleset({ balanceVersionId: config.version_id });
     this.compiledVehicle = compileVehicleBuild(this.compiledVehicle.build, config);
     this.registry.notifyBalanceConfig(config);
     this.registry.notifyBuildCompiled(this.compiledVehicle);
@@ -795,6 +859,19 @@ export class ModulusEngine implements IEngineContext {
 
   public setTrackGeometry(geometry: ITrackGeometryData): void {
     this.trackGeometry = geometry;
+    if (geometry.collisionHandle) {
+      this.lapTimer = new LapSectorTimer(geometry.collisionHandle, geometry.spline, {
+        startTimingMode: 'standing_on_launch',
+        sessionMode: this.runtimeState.aiEnabled ? 'ai_race' : 'time_trial',
+        ruleset: {
+          balanceVersionId: this.balanceConfig.version_id,
+          assistPreset: this.assists.assistPreset,
+          transmissionMode: this.assists.transmissionMode,
+        },
+      });
+    } else {
+      this.lapTimer = null;
+    }
     this.events.emit('track:built', { geometry });
     if (this.visualMode === 'track') {
       this.resetVehicleToStart();
@@ -1031,6 +1108,18 @@ export class ModulusEngine implements IEngineContext {
       w.scrubIntensity = 0;
     }
 
+    const resetInvalidEvent = this.lapTimer?.resetVehicle(st.vehicleId, {
+      tick: this.simTick,
+      slotIndex: 0,
+      position: spawn.position,
+      splineProgress: spawn.splineProgress,
+      preserveBestLap: true,
+      emitInvalidationIfArmed: true,
+    });
+    if (resetInvalidEvent) {
+      this.events.emit('lap:invalidated', resetInvalidEvent);
+    }
+
     this.events.emit('vehicle:reset', {
       position: { ...spawn.position },
       rotation: { ...spawn.rotation },
@@ -1039,6 +1128,7 @@ export class ModulusEngine implements IEngineContext {
 
   public setAiEnabled(enabled: boolean): void {
     this.runtimeState.aiEnabled = enabled;
+    this.lapTimer?.setSessionMode(enabled ? 'ai_race' : 'time_trial');
     this.events.emit('ai:toggled', { enabled });
   }
 }
