@@ -1,0 +1,80 @@
+{
+  "id": "track_dockyard_drift_park",
+  "trackVersion": "v1.0.0",
+  "name": "Dockyard Drift Park",
+  "country": "Indonesia",
+  "description": "A wide practice loop links a left-right initiation, a turnout for a long hold and several direction changes before the reset lane.",
+  "difficulty": "Beginner",
+  "courseTags": ["drift"],
+  "suggestedLaps": 3,
+  "baseLapRewardCredits": 1800,
+  "targetGoldTimeMs": 62000,
+  "targetSilverTimeMs": 74000,
+  "targetBronzeTimeMs": 88000,
+  "ambientTempC": 28,
+  "trackTempC": 37,
+  "defaultWidthM": 14,
+  "skyZenithHex": "#537687",
+  "skyHorizonHex": "#F1C894",
+  "sunColorHex": "#FFE7C9",
+  "groundColorHex": "#68726F",
+  "treeDensity": 0.03,
+  "rockDensity": 0,
+  "closed": true,
+  "sectorFractions": [
+    0.210526,
+    0.631579
+  ],
+  "sectors": [
+    {
+      "index": 0,
+      "name": "Initiation Lane",
+      "startT": 0,
+      "endT": 0.210526,
+      "surface": "tarmac"
+    },
+    {
+      "index": 1,
+      "name": "Long Hold",
+      "startT": 0.210526,
+      "endT": 0.631579,
+      "surface": "tarmac"
+    },
+    {
+      "index": 2,
+      "name": "Linked Exit",
+      "startT": 0.631579,
+      "endT": 1,
+      "surface": "tarmac"
+    }
+  ],
+  "driftZones": [
+    {
+      "id": "dz_dockyard_judged",
+      "name": "Judged Drift Span",
+      "startT": 0.105263,
+      "endT": 0.842105
+    }
+  ],
+  "controlPoints": [
+    { "x": 0, "y": 2, "z": 0, "widthM": 15, "bankDeg": 0 },
+    { "x": 0, "y": 2, "z": 71, "widthM": 15, "bankDeg": 0 },
+    { "x": 46, "y": 2, "z": 117, "widthM": 15, "bankDeg": 0 },
+    { "x": 116, "y": 2.1, "z": 122, "widthM": 16, "bankDeg": 0 },
+    { "x": 154, "y": 2.2, "z": 177, "widthM": 16, "bankDeg": 1 },
+    { "x": 133, "y": 2.3, "z": 227, "widthM": 16, "bankDeg": 1 },
+    { "x": 147, "y": 2.4, "z": 280, "widthM": 17, "bankDeg": -1 },
+    { "x": 219, "y": 2.4, "z": 304, "widthM": 17, "bankDeg": -1 },
+    { "x": 286, "y": 2.4, "z": 268, "widthM": 17, "bankDeg": -1 },
+    { "x": 308, "y": 2.3, "z": 197, "widthM": 16, "bankDeg": -1 },
+    { "x": 284, "y": 2.3, "z": 135, "widthM": 15, "bankDeg": 1 },
+    { "x": 312, "y": 2.2, "z": 83, "widthM": 15, "bankDeg": 1 },
+    { "x": 293, "y": 2.1, "z": 33, "widthM": 15, "bankDeg": -1 },
+    { "x": 249, "y": 2, "z": -13, "widthM": 15, "bankDeg": -1 },
+    { "x": 180, "y": 2, "z": -28, "widthM": 15, "bankDeg": -1 },
+    { "x": 116, "y": 2, "z": -11, "widthM": 15, "bankDeg": 1 },
+    { "x": 77, "y": 2, "z": -47, "widthM": 15, "bankDeg": 1 },
+    { "x": 30, "y": 2, "z": -67, "widthM": 15, "bankDeg": -1 },
+    { "x": 0, "y": 2, "z": -34, "widthM": 15, "bankDeg": 0 }
+  ]
+}

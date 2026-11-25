@@ -7,6 +7,8 @@ import brakePartsData from './parts/brakes.json';
 import aeroPartsData from './parts/aero.json';
 import coolingPartsData from './parts/cooling.json';
 
+import switchyardSprintData from './tracks/switchyard_sprint.json';
+import dockyardDriftParkData from './tracks/dockyard_drift_park.json';
 import gpCircuitData from './tracks/gp_circuit.json';
 import mountainPassData from './tracks/mountain_pass.json';
 import ovalTestData from './tracks/oval_test.json';
@@ -26,9 +28,17 @@ export const PARTS_CATALOG: IPartSchema[] = [
 ];
 
 export const TRACKS_CATALOG: ITrackSplineSchema[] = [
+  switchyardSprintData as unknown as ITrackSplineSchema,
   gpCircuitData as unknown as ITrackSplineSchema,
   mountainPassData as unknown as ITrackSplineSchema,
   ovalTestData as unknown as ITrackSplineSchema,
+];
+
+/**
+ * Staged courses validated for geometry/clearance but not yet promoted to the playable catalog.
+ */
+export const STAGED_TRACKS: ITrackSplineSchema[] = [
+  dockyardDriftParkData as unknown as ITrackSplineSchema,
 ];
 
 export const PARTS_BY_ID = new Map<string, IPartSchema>(

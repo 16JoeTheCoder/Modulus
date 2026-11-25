@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { ITrackSchemaV2Extensions } from '../../contracts/simulation';
 
 export type DrivetrainLayout = 'FF' | 'FR' | 'MR' | 'RR' | 'AWD';
 export type FrameMaterial = 'Mild Steel' | 'Chromoly' | 'Aluminum' | 'Carbon Monocoque';
@@ -135,7 +136,7 @@ export interface ITrackControlPoint {
   kerbRight?: boolean;
 }
 
-export interface ITrackSplineSchema {
+export interface ITrackSplineSchema extends ITrackSchemaV2Extensions {
   id: string;
   name: string;
   country: string;
