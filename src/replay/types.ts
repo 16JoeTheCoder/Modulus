@@ -11,7 +11,7 @@ import type {
 
 export const REPLAY_FORMAT_VERSION = 1 as const;
 export const DEFAULT_GHOST_SAMPLE_STRIDE_TICKS = 6 as const; // 20 Hz at 120 Hz fixed physics
-export const MAX_REPLAY_PAYLOAD_BYTES = 512 * 1024; // 512 KB sanity cap
+export const MAX_REPLAY_PAYLOAD_BYTES = 2 * 1024 * 1024; // 2 MB sanity cap (supports 70-180s 20 Hz ghost laps)
 
 export interface IGhostPoseSample {
   tick: number;

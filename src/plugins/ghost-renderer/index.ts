@@ -132,6 +132,12 @@ class GhostRendererController implements IModulusPlugin {
   private readonly tmpGhostPos = new THREE.Vector3();
 
   public init(ctx: IEngineContext): void {
+    // Strictly idempotent across React 19 StrictMode mount/unmount races while async initAll is in flight
+    for (const unsub of this.unsubs) {
+      unsub();
+    }
+    this.unsubs = [];
+    this.recorder.abortRun('reinit');
     this.ctx = ctx;
     this.rebuildGhostMesh(ctx.getCompiledVehicle());
 
