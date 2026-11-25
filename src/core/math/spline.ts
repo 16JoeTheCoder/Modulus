@@ -1,7 +1,17 @@
-import type { ITrackControlPoint, ITrackSplineSchema, Quat, Vec3 } from '../types';
+import {
+  normalizeTrackVersion,
+  type ITrackGridSlot,
+  type ITrackSectorMeta,
+  type ITrackTimingGate,
+  type ITrackZoneMeta,
+  type Quat,
+  type SurfaceType,
+  type Vec3,
+} from '../../contracts/simulation';
+import type { ITrackControlPoint, ITrackSplineSchema } from '../types';
 
 export interface ISplineSample {
-  t: number; // Normalized [0..1)
+  t: number; // Normalized spline parameter [0..1)
   distanceM: number;
   position: Vec3;
   tangent: Vec3; // Unit forward along track (+s)
@@ -13,6 +23,151 @@ export interface ISplineSample {
   signedCurvature: number;
   kerbLeft: boolean;
   kerbRight: boolean;
+  surface: SurfaceType;
+  inPassingZone: boolean;
+  inDriftZone: boolean;
+}
+
+export const TRACK_KERB_WIDTH_M = 1.05;
+export const TRACK_RUNOFF_WIDTH_M = 5.4;
+
+const DEFAULT_MIN_SAMPLES = 480;
+const DEFAULT_MAX_SAMPLES = 4096;
+const TARGET_SAMPLE_SPACING_M = 2.0;
+
+/**
+ * Checks if a normalized spline parameter `t` in [0..1) lies inside [startT, endT].
+ * Supports wrap-around across t = 0 when `startT > endT` (e.g. Switchyard Main Straight ~0.94 -> 0.08).
+ */
+export function isProgressInSpan(t: number, startT: number, endT: number): boolean {
+  const w = ((t % 1) + 1) % 1;
+  const s = ((startT % 1) + 1) % 1;
+  const e = endT >= 1 ? 1 : ((endT % 1) + 1) % 1;
+  if (endT >= 1 && s <= 1e-6) return true;
+  if (s <= e) {
+    return w >= s && w <= e;
+  }
+  return w >= s || w <= e;
+}
+
+/**
+ * Computes a deterministic recommended sample count based on approximate 3D route length
+ * so short courses (~1.2-2 km) sample at ~2 m spacing and long endurance routes stay fine.
+ */
+export function computeRecommendedSampleCount(schema: ITrackSplineSchema): number {
+  const pts = schema.controlPoints;
+  if (pts.length < 3) return DEFAULT_MIN_SAMPLES;
+  let polyLen = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i];
+    const b = pts[(i + 1) % pts.length];
+    polyLen += Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
+  }
+  // Catmull-Rom curve is slightly longer than control polygon
+  const estLen = polyLen * 1.04;
+  const raw = Math.ceil(estLen / TARGET_SAMPLE_SPACING_M);
+  // Align to multiple of 4 for clean decimation/post cadence
+  const aligned = Math.ceil(raw / 4) * 4;
+  return Math.max(DEFAULT_MIN_SAMPLES, Math.min(DEFAULT_MAX_SAMPLES, aligned));
+}
+
+/**
+ * Resolves normalized sector metadata from v2 `schema.sectors` or legacy `sectorFractions`.
+ */
+export function resolveTrackSectors(schema: ITrackSplineSchema): ITrackSectorMeta[] {
+  if (schema.sectors && schema.sectors.length >= 2) {
+    return schema.sectors.map((s, idx) => ({
+      index: idx,
+      name: s.name || `Sector ${idx + 1}`,
+      startT: s.startT,
+      endT: s.endT,
+      surface: s.surface ?? 'tarmac',
+    }));
+  }
+  const [s1, s2] = schema.sectorFractions;
+  return [
+    { index: 0, name: 'Sector 1', startT: 0, endT: s1, surface: 'tarmac' },
+    { index: 1, name: 'Sector 2', startT: s1, endT: s2, surface: 'tarmac' },
+    { index: 2, name: 'Sector 3', startT: s2, endT: 1, surface: 'tarmac' },
+  ];
+}
+
+/**
+ * Resolves unified zone list (passing, drift, surface) from v2 optional schema extensions.
+ */
+export function resolveTrackZones(schema: ITrackSplineSchema): ITrackZoneMeta[] {
+  const zones: ITrackZoneMeta[] = [];
+  if (schema.passingZones) {
+    for (const pz of schema.passingZones) {
+      zones.push({
+        id: pz.id,
+        name: pz.name,
+        kind: 'passing',
+        startT: pz.startT,
+        endT: pz.endT,
+      });
+    }
+  }
+  if (schema.driftZones) {
+    for (const dz of schema.driftZones) {
+      zones.push({
+        id: dz.id,
+        name: dz.name,
+        kind: 'drift',
+        startT: dz.startT,
+        endT: dz.endT,
+      });
+    }
+  }
+  if (schema.surfaceZones) {
+    schema.surfaceZones.forEach((sz, idx) => {
+      zones.push({
+        id: `surface_${idx}`,
+        name: `${sz.surface} zone`,
+        kind: 'surface',
+        startT: sz.startT,
+        endT: sz.endT,
+        surface: sz.surface,
+      });
+    });
+  }
+  return zones;
+}
+
+/**
+ * Deterministic 32-bit FNV-1a geometry hash over canonical track geometry + version + sampleCount.
+ * Used to pair render & collision handles 1:1 and partition replays/leaderboards.
+ */
+export function computeTrackGeometryHash(
+  schema: ITrackSplineSchema,
+  sampleCount: number
+): string {
+  const trackVersion = normalizeTrackVersion(schema.trackVersion);
+  const payload = JSON.stringify({
+    id: schema.id,
+    v: trackVersion,
+    closed: schema.closed,
+    w: schema.defaultWidthM,
+    sf: schema.sectorFractions,
+    n: sampleCount,
+    pts: schema.controlPoints.map((p) => [
+      p.x,
+      p.y,
+      p.z,
+      p.bankDeg,
+      p.widthM ?? null,
+      Boolean(p.kerbLeft),
+      Boolean(p.kerbRight),
+    ]),
+    surf: schema.surfaceZones ?? null,
+  });
+
+  let h = 2166136261;
+  for (let i = 0; i < payload.length; i++) {
+    h ^= payload.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return `trk_${(h >>> 0).toString(16).padStart(8, '0')}`;
 }
 
 function catmullRomScalar(p0: number, p1: number, p2: number, p3: number, u: number): number {
@@ -27,7 +182,13 @@ function catmullRomScalar(p0: number, p1: number, p2: number, p3: number, u: num
   );
 }
 
-function catmullRomDerivativeScalar(p0: number, p1: number, p2: number, p3: number, u: number): number {
+function catmullRomDerivativeScalar(
+  p0: number,
+  p1: number,
+  p2: number,
+  p3: number,
+  u: number
+): number {
   const u2 = u * u;
   return (
     0.5 *
@@ -63,17 +224,25 @@ function rotateAroundAxis(v: Vec3, axis: Vec3, angleRad: number): Vec3 {
 }
 
 /**
- * Converts basis vectors (right, up, forward) where local vehicle forward = +Z, up = +Y, left = +X (or Three.js right-handed: X = left, Y = up, Z = forward -> X = up x forward; or X = right, Y = up, -Z = forward).
+ * Converts basis vectors (left, up, forward) into a unit quaternion.
  * MODULUS Standard Right-Handed Basis:
- * Local +X = Left (`up x forward`), Local +Y = Up, Local +Z = Forward!
- * Check: X cross Y = (up x forward) x up = forward = +Z! Determinant = +1 (Pure Right-Handed!).
+ * Local +X = Left (`up x forward`), Local +Y = Up, Local +Z = Forward.
  */
 export function basisToQuaternion(left: Vec3, up: Vec3, forward: Vec3): Quat {
-  const m00 = left.x, m01 = up.x, m02 = forward.x;
-  const m10 = left.y, m11 = up.y, m12 = forward.y;
-  const m20 = left.z, m21 = up.z, m22 = forward.z;
+  const m00 = left.x,
+    m01 = up.x,
+    m02 = forward.x;
+  const m10 = left.y,
+    m11 = up.y,
+    m12 = forward.y;
+  const m20 = left.z,
+    m21 = up.z,
+    m22 = forward.z;
   const trace = m00 + m11 + m22;
-  let x = 0, y = 0, z = 0, w = 1;
+  let x = 0,
+    y = 0,
+    z = 0,
+    w = 1;
 
   if (trace > 0) {
     const s = 0.5 / Math.sqrt(trace + 1.0);
@@ -105,24 +274,60 @@ export function basisToQuaternion(left: Vec3, up: Vec3, forward: Vec3): Quat {
 }
 
 /**
- * Banked 3D Closed Catmull-Rom Track Spline
- * Used identically by track-generator, physics-rapier, Engine lap timing, and ai-test-driver.
+ * Banked 3D Closed Catmull-Rom Track Spline.
+ * Single canonical geometry source shared identically by track-generator (render + collision),
+ * physics-rapier, LapSectorTimer, previews, and ai-test-driver.
  */
 export class TrackSpline {
   public readonly schema: ITrackSplineSchema;
+  public readonly sampleCount: number;
   public readonly samples: ISplineSample[];
   public readonly totalLengthM: number;
+  public readonly sectors: ITrackSectorMeta[];
+  public readonly zones: ITrackZoneMeta[];
+  public readonly geometryHash: string;
 
-  constructor(schema: ITrackSplineSchema, sampleCount = 480) {
+  constructor(schema: ITrackSplineSchema, sampleCount?: number) {
     this.schema = schema;
+    const count =
+      sampleCount && sampleCount >= 64
+        ? sampleCount
+        : computeRecommendedSampleCount(schema);
+    this.sampleCount = count;
+    this.sectors = resolveTrackSectors(schema);
+    this.zones = resolveTrackZones(schema);
+    this.geometryHash = computeTrackGeometryHash(schema, count);
+
     const pts = schema.controlPoints;
     const n = pts.length;
+    const hasExplicitKerbs = pts.some((p) => Boolean(p.kerbLeft || p.kerbRight));
+
+    const passingZones = this.zones.filter((z) => z.kind === 'passing');
+    const driftZones = this.zones.filter((z) => z.kind === 'drift');
+    const surfaceZones = this.zones.filter((z) => z.kind === 'surface' && z.surface);
+
+    const resolveSurfaceAt = (t: number): SurfaceType => {
+      for (let i = 0; i < surfaceZones.length; i++) {
+        const sz = surfaceZones[i];
+        if (sz.surface && isProgressInSpan(t, sz.startT, sz.endT)) {
+          return sz.surface;
+        }
+      }
+      for (let i = 0; i < this.sectors.length; i++) {
+        const sec = this.sectors[i];
+        if (t >= sec.startT && (t < sec.endT || (i === this.sectors.length - 1 && t <= 1))) {
+          return sec.surface;
+        }
+      }
+      return 'tarmac';
+    };
+
     const rawSamples: Omit<ISplineSample, 'curvature' | 'signedCurvature'>[] = [];
     let cumulativeDist = 0;
     let prevPos: Vec3 | null = null;
 
-    for (let i = 0; i < sampleCount; i++) {
-      const t = i / sampleCount;
+    for (let i = 0; i < count; i++) {
+      const t = i / count;
       const segFloat = t * n;
       const segIdx = Math.floor(segFloat) % n;
       const u = segFloat - Math.floor(segFloat);
@@ -171,6 +376,9 @@ export class TrackSpline {
       prevPos = position;
 
       const nearestCtrl = u < 0.5 ? p1 : p2;
+      const inPassingZone = passingZones.some((z) => isProgressInSpan(t, z.startT, z.endT));
+      const inDriftZone = driftZones.some((z) => isProgressInSpan(t, z.startT, z.endT));
+
       rawSamples.push({
         t,
         distanceM: cumulativeDist,
@@ -182,6 +390,9 @@ export class TrackSpline {
         widthM,
         kerbLeft: Boolean(nearestCtrl.kerbLeft),
         kerbRight: Boolean(nearestCtrl.kerbRight),
+        surface: resolveSurfaceAt(t),
+        inPassingZone,
+        inDriftZone,
       });
     }
 
@@ -191,8 +402,8 @@ export class TrackSpline {
       cumulativeDist + Math.hypot(first.x - last.x, first.y - last.y, first.z - last.z);
 
     this.samples = rawSamples.map((s, idx) => {
-      const prev = rawSamples[(idx - 1 + sampleCount) % sampleCount];
-      const next = rawSamples[(idx + 1) % sampleCount];
+      const prev = rawSamples[(idx - 1 + count) % count];
+      const next = rawSamples[(idx + 1) % count];
       const ds =
         Math.hypot(
           next.position.x - prev.position.x,
@@ -204,22 +415,39 @@ export class TrackSpline {
       const dtZ = next.tangent.z - prev.tangent.z;
       const curvature = Math.hypot(dtX, dtY, dtZ) / ds;
       const turnSign = dtX * s.right.x + dtY * s.right.y + dtZ * s.right.z >= 0 ? 1 : -1;
+      const signedCurvature = curvature * turnSign;
+
+      // Auto-derive subtle apex kerbs on tight tarmac bends when route JSON omits kerb flags,
+      // while keeping passing zones and straights completely clear.
+      let kerbLeft = s.kerbLeft;
+      let kerbRight = s.kerbRight;
+      if (!hasExplicitKerbs && !s.inPassingZone && s.surface === 'tarmac' && curvature >= 0.015) {
+        // turnSign < 0 => left bend (inside apex on left); turnSign > 0 => right bend (inside apex on right)
+        if (signedCurvature < 0) kerbLeft = true;
+        else kerbRight = true;
+      }
+
       return {
         ...s,
+        kerbLeft,
+        kerbRight,
         curvature,
-        signedCurvature: curvature * turnSign,
+        signedCurvature,
       };
     });
   }
 
   public sampleAtProgress(t: number): ISplineSample {
     const wrapped = ((t % 1) + 1) % 1;
-    const floatIdx = wrapped * this.samples.length;
-    const i0 = Math.floor(floatIdx) % this.samples.length;
-    const i1 = (i0 + 1) % this.samples.length;
+    const count = this.samples.length;
+    const floatIdx = wrapped * count;
+    const i0 = Math.floor(floatIdx) % count;
+    const i1 = (i0 + 1) % count;
     const frac = floatIdx - Math.floor(floatIdx);
     const a = this.samples[i0];
     const b = this.samples[i1];
+
+    const distB = i1 === 0 ? this.totalLengthM : b.distanceM;
 
     const position: Vec3 = {
       x: a.position.x + (b.position.x - a.position.x) * frac,
@@ -244,7 +472,7 @@ export class TrackSpline {
 
     return {
       t: wrapped,
-      distanceM: wrapped * this.totalLengthM,
+      distanceM: a.distanceM + (distB - a.distanceM) * frac,
       position,
       tangent,
       normal,
@@ -255,10 +483,43 @@ export class TrackSpline {
       signedCurvature: a.signedCurvature + (b.signedCurvature - a.signedCurvature) * frac,
       kerbLeft: a.kerbLeft,
       kerbRight: a.kerbRight,
+      surface: a.surface,
+      inPassingZone: a.inPassingZone,
+      inDriftZone: a.inDriftZone,
     };
   }
 
-  public findClosestSample(point: Vec3, hintProgress?: number): {
+  /**
+   * Maps an arc-length distance in meters (wrapped to [0, totalLengthM)) to exact spline parameter `t`.
+   */
+  public progressAtDistance(distanceM: number): number {
+    const len = this.totalLengthM;
+    if (len <= 1e-6) return 0;
+    const d = ((distanceM % len) + len) % len;
+    const count = this.samples.length;
+
+    let lo = 0;
+    let hi = count - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >>> 1;
+      if (this.samples[mid].distanceM <= d) {
+        lo = mid;
+      } else {
+        hi = mid - 1;
+      }
+    }
+
+    const d0 = this.samples[lo].distanceM;
+    const d1 = lo === count - 1 ? len : this.samples[lo + 1].distanceM;
+    const span = Math.max(1e-6, d1 - d0);
+    const frac = Math.max(0, Math.min(1, (d - d0) / span));
+    return ((lo + frac) / count) % 1;
+  }
+
+  public findClosestSample(
+    point: Vec3,
+    hintProgress?: number
+  ): {
     sample: ISplineSample;
     lateralOffsetM: number;
     distanceSq: number;
@@ -269,7 +530,7 @@ export class TrackSpline {
 
     if (hintProgress !== undefined) {
       const center = Math.floor((((hintProgress % 1) + 1) % 1) * n);
-      const windowRadius = 32;
+      const windowRadius = Math.max(32, Math.ceil(n * 0.08));
       for (let offset = -windowRadius; offset <= windowRadius; offset++) {
         const idx = (center + offset + n) % n;
         const s = this.samples[idx];
@@ -308,8 +569,119 @@ export class TrackSpline {
     return { sample: best, lateralOffsetM, distanceSq: bestDistSq };
   }
 
-  public getSpawnTransform(): { position: Vec3; rotation: Quat } {
-    const start = this.sampleAtProgress(0.005);
+  /**
+   * Builds 4 standing start grid slots behind the Start/Finish line (t = 0).
+   * Slot 0 sits centered at -2.5 m (nose right at the S/F line per contract),
+   * while slots 1..3 stagger cleanly behind with safe lateral clearance for AI / Friend Race.
+   */
+  public getStartGridSlots(count = 4): ITrackGridSlot[] {
+    const slots: ITrackGridSlot[] = [];
+    const slotBackOffsetsM = [2.5, 10.0, 17.5, 25.0];
+    const slotLateralFracs = [0.0, 0.22, -0.22, 0.22];
+
+    for (let i = 0; i < count; i++) {
+      const backM = slotBackOffsetsM[i] ?? 2.5 + i * 7.5;
+      const latFrac = slotLateralFracs[i] ?? (i % 2 === 1 ? 0.22 : -0.22);
+      const t = this.progressAtDistance(this.totalLengthM - backM);
+      const s = this.sampleAtProgress(t);
+      const maxSafeLat = Math.max(0, s.widthM * 0.5 - 2.1);
+      const lateralOffsetM = Math.max(-maxSafeLat, Math.min(maxSafeLat, s.widthM * latFrac));
+      const left: Vec3 = { x: -s.right.x, y: -s.right.y, z: -s.right.z };
+      const rotation = basisToQuaternion(left, s.normal, s.tangent);
+
+      slots.push({
+        slotIndex: i,
+        position: {
+          x: s.position.x + s.right.x * lateralOffsetM + s.normal.x * 0.65,
+          y: s.position.y + s.right.y * lateralOffsetM + s.normal.y * 0.65,
+          z: s.position.z + s.right.z * lateralOffsetM + s.normal.z * 0.65,
+        },
+        rotation,
+        splineProgress: t,
+        lateralOffsetM,
+      });
+    }
+    return slots;
+  }
+
+  /**
+   * Builds ordered timing & anti-cut checkpoint gates along [0..1):
+   * Gate 0 = Start/Finish (completes final sector), followed by interleaved
+   * anti-cut mid-sector checkpoints and sector split gates in strictly ascending `t`.
+   */
+  public buildTimingGates(): ITrackTimingGate[] {
+    const sectors = this.sectors;
+    const rawGates: Array<{
+      kind: 'start_finish' | 'sector' | 'checkpoint';
+      sectorIndex?: number;
+      sectorName?: string;
+      t: number;
+    }> = [];
+
+    const finalSector = sectors[sectors.length - 1];
+    rawGates.push({
+      kind: 'start_finish',
+      sectorIndex: finalSector.index,
+      sectorName: finalSector.name,
+      t: 0,
+    });
+
+    for (let i = 0; i < sectors.length; i++) {
+      const sec = sectors[i];
+      const startT = sec.startT;
+      const endT = i === sectors.length - 1 ? 1.0 : sec.endT;
+      const midT = (startT + endT) * 0.5;
+      if (midT > 0.02 && midT < 0.98) {
+        rawGates.push({
+          kind: 'checkpoint',
+          t: midT,
+        });
+      }
+      if (i < sectors.length - 1) {
+        rawGates.push({
+          kind: 'sector',
+          sectorIndex: sec.index,
+          sectorName: sec.name,
+          t: endT,
+        });
+      }
+    }
+
+    rawGates.sort((a, b) => a.t - b.t);
+
+    return rawGates.map((g, gateIndex) => {
+      const s = this.sampleAtProgress(g.t);
+      const halfWidthM = s.widthM * 0.5 + TRACK_KERB_WIDTH_M + TRACK_RUNOFF_WIDTH_M;
+      return {
+        gateIndex,
+        kind: g.kind,
+        sectorIndex: g.sectorIndex,
+        sectorName: g.sectorName,
+        t: g.t,
+        center: { ...s.position },
+        tangent: { ...s.tangent },
+        right: { ...s.right },
+        normal: { ...s.normal },
+        halfWidthM,
+      };
+    });
+  }
+
+  public getSpawnTransform(): { position: Vec3; rotation: Quat; splineProgress: number } {
+    const slot0 = this.getStartGridSlots(1)[0];
+    return {
+      position: slot0.position,
+      rotation: slot0.rotation,
+      splineProgress: slot0.splineProgress,
+    };
+  }
+
+  /**
+   * Legacy spawn transform just ahead of t=0 for backwards compatibility with pre-LapSectorTimer Engine.ts
+   * (avoids t=0.005 -> t=0.998 wrap misfiring Sector 1). New Engine.ts uses `collisionHandle.startGrid[0]`.
+   */
+  public getLegacySpawnTransform(): { position: Vec3; rotation: Quat } {
+    const start = this.sampleAtProgress(0.001);
     const left: Vec3 = { x: -start.right.x, y: -start.right.y, z: -start.right.z };
     const rotation = basisToQuaternion(left, start.normal, start.tangent);
     return {
