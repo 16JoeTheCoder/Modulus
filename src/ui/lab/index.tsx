@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   AlertTriangle,
+  ArrowLeft,
   Bot,
   Box,
   ChevronDown,
@@ -15,6 +16,7 @@ import {
   Play,
   Plus,
   Save,
+  Settings,
   Shield,
   Sliders,
   Target,
@@ -35,6 +37,14 @@ import type {
   PartModuleCategory,
   VisualMode,
 } from '../../core/types';
+import {
+  formatSpeedFromKph,
+  speedUnitLabel,
+  updatePlayerSettings,
+  type LabExperienceMode,
+  type PlayerSettings,
+} from '../settingsStore';
+import { BeginnerLabPanel } from './BeginnerLabPanel';
 import { CircuitModal } from './CircuitModal';
 import { DynoChart } from './DynoChart';
 import { ModuleEditor } from './ModuleEditor';
@@ -43,6 +53,11 @@ import { SpiderChart } from './SpiderChart';
 export interface ILabViewProps {
   engine: ModulusEngine;
   storage: StorageSync;
+  visible: boolean;
+  settings: PlayerSettings;
+  onBackToGarage: () => void;
+  onOpenSettings: () => void;
+  onLaunchDrive: (aiEnabled: boolean) => void;
 }
 
 const MODULES: Array<{
@@ -61,7 +76,15 @@ const MODULES: Array<{
   { id: 'cooling', label: 'Fuel & Cooling', short: 'Cooling', icon: Flame },
 ];
 
-export function EngineeringLab({ engine, storage }: ILabViewProps) {
+export function EngineeringLab({
+  engine,
+  storage,
+  visible,
+  settings,
+  onBackToGarage,
+  onOpenSettings,
+  onLaunchDrive,
+}: ILabViewProps) {
   const [visualMode, setVisualMode] = useState<VisualMode>(() => engine.getVisualMode());
   const [compiled, setCompiled] = useState<ICompiledVehicle>(() => engine.getCompiledVehicle());
   const [balanceConfig, setBalanceConfig] = useState<IGlobalBalanceConfig>(() =>
@@ -116,10 +139,15 @@ export function EngineeringLab({ engine, storage }: ILabViewProps) {
     };
   }, [engine, storage]);
 
-  if (visualMode !== 'lab') return null;
+  if (!visible || visualMode !== 'lab') return null;
 
   const build = compiled.build;
   const priceMult = balanceConfig.economy_bias.part_price_mult;
+  const labMode: LabExperienceMode = settings.labMode;
+  const frontWtPct = Math.round(compiled.frontWeightDistributionPct);
+  const rearWtPct = 100 - frontWtPct;
+  const topSpeedVal = formatSpeedFromKph(compiled.estimatedTopSpeedKph, settings.speedUnit);
+  const topSpeedUnit = speedUnitLabel(settings.speedUnit);
 
   const handleUpdateBuild = (next: IVehicleBuildConfig) => {
     engine.updateBuild(next);
@@ -152,8 +180,7 @@ export function EngineeringLab({ engine, storage }: ILabViewProps) {
   };
 
   const handleLaunch = (aiEnabled: boolean) => {
-    engine.setAiEnabled(aiEnabled);
-    engine.setVisualMode('track');
+    onLaunchDrive(aiEnabled);
   };
 
   const selectModule = (mod: PartModuleCategory) => {
@@ -172,6 +199,15 @@ export function EngineeringLab({ engine, storage }: ILabViewProps) {
         style={{ paddingTop: 'var(--safe-top)' }}
       >
         <div className="flex items-center gap-2.5">
+          <button
+            type="button"
+            onClick={onBackToGarage}
+            className="flex items-center gap-1.5 rounded-lg border border-slate-700/80 bg-slate-900/90 px-2.5 py-1.5 text-xs font-bold text-slate-200 transition hover:border-cyan-400 hover:text-white"
+          >
+            <ArrowLeft className="h-3.5 w-3.5 text-cyan-400" />
+            <span>Garage</span>
+          </button>
+
           <div className="flex items-center gap-2">
             <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-cyan-400/15 text-cyan-400 ring-1 ring-cyan-400/40">
               <Wrench className="h-4 w-4" />
@@ -239,6 +275,16 @@ export function EngineeringLab({ engine, storage }: ILabViewProps) {
             {balanceConfig.version_id}
           </span>
 
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            className="flex items-center gap-1 rounded-md border border-slate-700/80 bg-slate-900/90 px-2 py-1 text-[11px] font-semibold text-slate-200 transition hover:border-cyan-400"
+            title="Settings"
+          >
+            <Settings className="h-3.5 w-3.5 text-cyan-400" />
+            <span className="hidden md:inline">Settings</span>
+          </button>
+
           {user?.role === 'admin' && (
             <button
               type="button"
@@ -268,13 +314,26 @@ export function EngineeringLab({ engine, storage }: ILabViewProps) {
 
       {/* MIDDLE WORKSPACE (Leaves center 3D viewport open for free camera orbit!) */}
       <div className="pointer-events-none relative flex min-h-0 flex-1 items-stretch justify-between gap-3 p-3">
-        {/* LEFT DOCK: 8-Module Customizer */}
+        {/* LEFT DOCK: Beginner & Advanced Lab Customizer */}
         <aside className="pointer-events-auto flex max-h-full w-full max-w-[360px] flex-col overflow-hidden rounded-2xl border border-slate-800/90 bg-[#0A0D14]/88 shadow-2xl backdrop-blur-md">
-          {/* Drawer Toggle Header */}
-          <div className="flex items-center justify-between border-b border-slate-800 px-3 py-2">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-200">
-              8-Module Customizer
-            </span>
+          {/* Drawer Toggle + Beginner / Advanced Switch */}
+          <div className="flex items-center justify-between gap-2 border-b border-slate-800 px-3 py-2">
+            <div className="flex rounded-lg border border-slate-800 bg-[#070A0F] p-0.5 text-[10px] font-bold uppercase">
+              {(['beginner', 'advanced'] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => updatePlayerSettings({ labMode: m })}
+                  className={`rounded-md px-2.5 py-1 transition ${
+                    labMode === m
+                      ? 'bg-cyan-500/20 text-cyan-200'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
             <button
               type="button"
               onClick={() => setDrawerOpen((v) => !v)}
@@ -294,44 +353,58 @@ export function EngineeringLab({ engine, storage }: ILabViewProps) {
             </button>
           </div>
 
-          {/* 8 Module Tabs */}
-          <div className="grid grid-cols-4 gap-1 border-b border-slate-800/80 bg-[#080B10] p-1.5">
-            {MODULES.map((m) => {
-              const Icon = m.icon;
-              const active = activeModule === m.id;
-              return (
-                <button
-                  key={m.id}
-                  type="button"
-                  onClick={() => selectModule(m.id)}
-                  onMouseEnter={() => engine.setLabOverlayOptions({ highlightedModule: m.id })}
-                  onMouseLeave={() =>
-                    engine.setLabOverlayOptions({ highlightedModule: activeModule })
-                  }
-                  className={`flex flex-col items-center justify-center gap-0.5 rounded-lg px-1 py-1.5 text-[10px] font-semibold transition ${
-                    active
-                      ? 'bg-cyan-500/20 text-cyan-300 ring-1 ring-cyan-400/60'
-                      : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-200'
-                  }`}
-                >
-                  <Icon className="h-3.5 w-3.5" />
-                  <span className="truncate">{m.short}</span>
-                </button>
-              );
-            })}
-          </div>
+          {/* 8 Module Tabs (Advanced Lab only) */}
+          {labMode === 'advanced' && (
+            <div className="grid grid-cols-4 gap-1 border-b border-slate-800/80 bg-[#080B10] p-1.5">
+              {MODULES.map((m) => {
+                const Icon = m.icon;
+                const active = activeModule === m.id;
+                return (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => selectModule(m.id)}
+                    onMouseEnter={() => engine.setLabOverlayOptions({ highlightedModule: m.id })}
+                    onMouseLeave={() =>
+                      engine.setLabOverlayOptions({ highlightedModule: activeModule })
+                    }
+                    className={`flex flex-col items-center justify-center gap-0.5 rounded-lg px-1 py-1.5 text-[10px] font-semibold transition ${
+                      active
+                        ? 'bg-cyan-500/20 text-cyan-300 ring-1 ring-cyan-400/60'
+                        : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-200'
+                    }`}
+                  >
+                    <Icon className="h-3.5 w-3.5" />
+                    <span className="truncate">{m.short}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
 
           {/* Scrollable Module Controls */}
           {drawerOpen && (
             <div className="flex-1 overflow-y-auto p-3">
-              <ModuleEditor
-                activeModule={activeModule}
-                build={build}
-                priceMult={priceMult}
-                isOwned={isOwned}
-                onPurchase={(id) => storage.purchaseItem(id)}
-                onChangeBuild={handleUpdateBuild}
-              />
+              {labMode === 'beginner' ? (
+                <BeginnerLabPanel
+                  build={build}
+                  compiled={compiled}
+                  balanceConfig={balanceConfig}
+                  speedUnit={settings.speedUnit}
+                  isOwned={isOwned}
+                  onChangeBuild={handleUpdateBuild}
+                  onSwitchToAdvanced={() => updatePlayerSettings({ labMode: 'advanced' })}
+                />
+              ) : (
+                <ModuleEditor
+                  activeModule={activeModule}
+                  build={build}
+                  priceMult={priceMult}
+                  isOwned={isOwned}
+                  onPurchase={(id) => storage.purchaseItem(id)}
+                  onChangeBuild={handleUpdateBuild}
+                />
+              )}
             </div>
           )}
         </aside>
@@ -375,14 +448,13 @@ export function EngineeringLab({ engine, storage }: ILabViewProps) {
                 <div className="rounded-lg border border-slate-800 bg-slate-900/80 p-2">
                   <div className="text-[9px] text-slate-500">TOP SPD</div>
                   <div className="text-xs font-bold text-amber-300">
-                    {compiled.estimatedTopSpeedKph} kph
+                    {topSpeedVal} {topSpeedUnit.toLowerCase()}
                   </div>
                 </div>
                 <div className="rounded-lg border border-slate-800 bg-slate-900/80 p-2">
                   <div className="text-[9px] text-slate-500">F / R WT</div>
                   <div className="text-xs font-bold text-slate-200">
-                    {compiled.frontWeightDistributionPct.toFixed(0)}/
-                    {(100 - compiled.frontWeightDistributionPct).toFixed(0)}%
+                    {frontWtPct}/{rearWtPct}%
                   </div>
                 </div>
                 <div className="rounded-lg border border-slate-800 bg-slate-900/80 p-2">
@@ -475,9 +547,7 @@ export function EngineeringLab({ engine, storage }: ILabViewProps) {
           >
             <Target className="h-3.5 w-3.5" />
             <span>
-              CG {compiled.frontWeightDistributionPct.toFixed(0)}/
-              {(100 - compiled.frontWeightDistributionPct).toFixed(0)} ·{' '}
-              {(compiled.cgHeightM * 1000).toFixed(0)}mm
+              CG {frontWtPct}/{rearWtPct} · {(compiled.cgHeightM * 1000).toFixed(0)}mm
             </span>
           </button>
 

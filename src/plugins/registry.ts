@@ -10,6 +10,7 @@ import { thermalsPlugin } from './thermals';
 import { physicsRapierPlugin } from './physics-rapier';
 import { carAssemblerPlugin } from './car-assembler';
 import { fxRendererPlugin } from './fx-renderer';
+import { audioSynthPlugin } from './audio-synth';
 
 /**
  * Single Plug-and-Play Manifest Toggling Active MODULUS Systems
@@ -25,6 +26,7 @@ export const ACTIVE_PLUGINS: IModulusPlugin[] = [
   vehicleSolverPlugin,  // 60: Raycast suspension, weight transfer, Pacejka tires, brakes
   thermalsPlugin,       // 70: Engine, tire & brake heat/cooling/wear/fade
   physicsRapierPlugin,  // 75: Rapier3D WASM rigid-body step + 4-corner raycasts
-  carAssemblerPlugin,   // 80: Procedural low-poly car + Dark Lab CG/aero overlays
-  fxRendererPlugin,     // 90: Dual lighting swap, skidmarks, tire smoke, camera rig
+  carAssemblerPlugin,   // 80: Procedural low-poly car + Cockpit interior + Dark Lab overlays
+  fxRendererPlugin,     // 90: Dual lighting swap, skidmarks, tire smoke, cockpit/chase camera rig
+  audioSynthPlugin,     // 95: Procedural Web Audio engine, shift, tire scrub, kerb & impact cues
 ];
