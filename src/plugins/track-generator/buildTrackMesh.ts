@@ -251,10 +251,10 @@ export function buildTrackBundle(schema: ITrackSplineSchema): IBuiltTrackBundle 
 
   const sectorGateIndices = new Map<number, THREE.Color>();
   if (schema.sectorFractions[0] > 0 && schema.sectorFractions[0] < 1) {
-    sectorGateIndices.set(Math.round(schema.sectorFractions[0] * n) % n, sector1Amber);
+    sectorGateIndices.set(spline.indexAtProgress(schema.sectorFractions[0]), sector1Amber);
   }
   if (schema.sectorFractions[1] > 0 && schema.sectorFractions[1] < 1) {
-    sectorGateIndices.set(Math.round(schema.sectorFractions[1] * n) % n, sector2Cyan);
+    sectorGateIndices.set(spline.indexAtProgress(schema.sectorFractions[1]), sector2Cyan);
   }
 
   const buildStrips = (s: ISplineSample, segIndex: number): StripDef[] => {
@@ -507,9 +507,17 @@ export function buildTrackBundle(schema: ITrackSplineSchema): IBuiltTrackBundle 
   barrierMesh.name = 'track_barriers';
   root.add(barrierMesh);
 
-  // Instanced guardrail steel support posts every ~10 m
-  const postStep = Math.max(4, Math.round(n / 140));
-  const postCount = Math.ceil(n / postStep) * 2;
+  // Instanced guardrail steel support posts spaced cleanly every ~10 m along arc-length
+  const postIndices: number[] = [];
+  let nextPostDistM = 0;
+  const postIntervalM = 10.0;
+  for (let i = 0; i < n; i++) {
+    if (samples[i].distanceM >= nextPostDistM) {
+      postIndices.push(i);
+      nextPostDistM = samples[i].distanceM + postIntervalM;
+    }
+  }
+  const postCount = postIndices.length * 2;
   const postGeo = trackDisposable(new THREE.BoxGeometry(0.12, 0.95, 0.12));
   const postMat = trackDisposable(
     new THREE.MeshStandardMaterial({
@@ -523,8 +531,8 @@ export function buildTrackBundle(schema: ITrackSplineSchema): IBuiltTrackBundle 
   postInstanced.castShadow = true;
   const dummy = new THREE.Object3D();
   let pCursor = 0;
-  for (let i = 0; i < n; i += postStep) {
-    const s = samples[i];
+  for (let k = 0; k < postIndices.length; k++) {
+    const s = samples[postIndices[k]];
     const outerLat = s.widthM * 0.5 + TRACK_KERB_WIDTH_M + TRACK_RUNOFF_WIDTH_M + railThick * 0.6;
     for (const side of [-1, 1] as const) {
       if (pCursor >= postCount) break;
@@ -548,7 +556,7 @@ export function buildTrackBundle(schema: ITrackSplineSchema): IBuiltTrackBundle 
   const centerZ = (bMin.z + bMax.z) * 0.5;
   const minY = bMin.y;
   const span = Math.max(bMax.x - bMin.x, bMax.z - bMin.z) + 520;
-  const gridSegs = span > 1400 ? 128 : 96;
+  const gridSegs = span > 2800 ? 192 : span > 1400 ? 144 : 96;
   const cellSize = span / gridSegs;
   // Guarantee every vertex of any terrain cell touching road or outer runoff is strictly depressed
   const corridorExtraM = cellSize * 1.35 + 3.0;
@@ -629,10 +637,54 @@ export function buildTrackBundle(schema: ITrackSplineSchema): IBuiltTrackBundle 
   terrainMesh.name = 'track_terrain_apron';
   root.add(terrainMesh);
 
-  // Seamless embankment skirt connecting outer runoff smoothly down into depressed terrain corridor
+  // Dynamic 2-tier corridor embankment skirt:
+  // Tier 1 drops cleanly below the outer runoff lip into a 6 m shoulder berm.
+  // Tier 2 spans dynamically out to bridge wide endurance terrain corridors (clamped below any nearby road leg at tight hairpins).
   const skirtPos: number[] = [];
   const skirtCol: number[] = [];
-  const skirtColOuter = new THREE.Color(schema.groundColorHex).multiplyScalar(0.88);
+  const skirtColMid = new THREE.Color(schema.groundColorHex).multiplyScalar(0.93);
+  const skirtColOuter = new THREE.Color(schema.groundColorHex).multiplyScalar(0.84);
+  const dynamicSkirtReachM = Math.min(48, Math.max(14, corridorExtraM + cellSize * 0.55));
+  const shoulderOffsetM = 5.5;
+
+  const evalSkirtOuterPoint = (s: ISplineSample, side: -1 | 1, reachM: number): Vec3 => {
+    const outerLat = s.widthM * 0.5 + TRACK_KERB_WIDTH_M + TRACK_RUNOFF_WIDTH_M;
+    const raw = evalSurfacePoint(s, side * (outerLat + reachM), 0);
+    const terrY = evalTerrainHeight(raw.x, raw.z).y;
+    const clearance = spatialIndex.queryClearance(raw.x, raw.z, 3.0);
+    // Ground cleanly into the terrain apron below, while strictly staying below any nearby road leg
+    const safeRoadCeiling = clearance.inCorridor
+      ? clearance.minCorridorRoadY - 0.62
+      : s.position.y - 0.55;
+    const groundedY = Math.min(terrY - 0.35, safeRoadCeiling, s.position.y - 1.2);
+    return { x: raw.x, y: groundedY, z: raw.z };
+  };
+
+  const evalSkirtMidPoint = (s: ISplineSample, side: -1 | 1): Vec3 => {
+    const outerLat = s.widthM * 0.5 + TRACK_KERB_WIDTH_M + TRACK_RUNOFF_WIDTH_M;
+    const raw = evalSurfacePoint(s, side * (outerLat + shoulderOffsetM), 0);
+    const terrY = evalTerrainHeight(raw.x, raw.z).y;
+    const clearance = spatialIndex.queryClearance(raw.x, raw.z, 2.0);
+    const safeRoadCeiling = clearance.inCorridor
+      ? clearance.minCorridorRoadY - 0.52
+      : s.position.y - 0.52;
+    const midY = Math.min(s.position.y - 0.58, terrY - 0.12, safeRoadCeiling);
+    return { x: raw.x, y: midY, z: raw.z };
+  };
+
+  // Precompute left/right mid & outer skirt rings so adjacent segments share exact stitched edges
+  const leftMidRing: Vec3[] = new Array(n);
+  const leftOuterRing: Vec3[] = new Array(n);
+  const rightMidRing: Vec3[] = new Array(n);
+  const rightOuterRing: Vec3[] = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const s = samples[i];
+    leftMidRing[i] = evalSkirtMidPoint(s, -1);
+    leftOuterRing[i] = evalSkirtOuterPoint(s, -1, dynamicSkirtReachM);
+    rightMidRing[i] = evalSkirtMidPoint(s, 1);
+    rightOuterRing[i] = evalSkirtOuterPoint(s, 1, dynamicSkirtReachM);
+  }
+
   for (let i = 0; i < n; i++) {
     const iNext = (i + 1) % n;
     const s0 = samples[i];
@@ -640,18 +692,33 @@ export function buildTrackBundle(schema: ITrackSplineSchema): IBuiltTrackBundle 
     const outer0 = s0.widthM * 0.5 + TRACK_KERB_WIDTH_M + TRACK_RUNOFF_WIDTH_M;
     const outer1 = s1.widthM * 0.5 + TRACK_KERB_WIDTH_M + TRACK_RUNOFF_WIDTH_M;
 
-    for (const side of [-1, 1] as const) {
-      const a0 = evalSurfacePoint(s0, side * outer0, -0.08);
-      const b0 = evalSurfacePoint(s0, side * (outer0 + 12), -3.2);
-      const a1 = evalSurfacePoint(s1, side * outer1, -0.08);
-      const b1 = evalSurfacePoint(s1, side * (outer1 + 12), -3.2);
+    const aL0 = evalSurfacePoint(s0, -outer0, -0.08);
+    const aL1 = evalSurfacePoint(s1, -outer1, -0.08);
+    pushQuadDoubleColor(skirtPos, skirtCol, leftMidRing[i], aL0, leftMidRing[iNext], aL1, skirtColMid, groundBase);
+    pushQuadDoubleColor(
+      skirtPos,
+      skirtCol,
+      leftOuterRing[i],
+      leftMidRing[i],
+      leftOuterRing[iNext],
+      leftMidRing[iNext],
+      skirtColOuter,
+      skirtColMid
+    );
 
-      if (side === -1) {
-        pushQuadDoubleColor(skirtPos, skirtCol, b0, a0, b1, a1, skirtColOuter, groundBase);
-      } else {
-        pushQuadDoubleColor(skirtPos, skirtCol, a0, b0, a1, b1, groundBase, skirtColOuter);
-      }
-    }
+    const aR0 = evalSurfacePoint(s0, outer0, -0.08);
+    const aR1 = evalSurfacePoint(s1, outer1, -0.08);
+    pushQuadDoubleColor(skirtPos, skirtCol, aR0, rightMidRing[i], aR1, rightMidRing[iNext], groundBase, skirtColMid);
+    pushQuadDoubleColor(
+      skirtPos,
+      skirtCol,
+      rightMidRing[i],
+      rightOuterRing[i],
+      rightMidRing[iNext],
+      rightOuterRing[iNext],
+      skirtColMid,
+      skirtColOuter
+    );
   }
   const skirtGeo = trackDisposable(new THREE.BufferGeometry());
   skirtGeo.setAttribute('position', new THREE.Float32BufferAttribute(skirtPos, 3));
@@ -659,6 +726,7 @@ export function buildTrackBundle(schema: ITrackSplineSchema): IBuiltTrackBundle 
   skirtGeo.computeVertexNormals();
   const skirtMesh = new THREE.Mesh(skirtGeo, terrainMat);
   skirtMesh.receiveShadow = true;
+  skirtMesh.name = 'track_corridor_skirt';
   root.add(skirtMesh);
 
   // =========================================================================
