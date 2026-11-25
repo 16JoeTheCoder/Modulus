@@ -1,5 +1,14 @@
 import { createStarterBuild, PARTS_BY_ID, CHASSIS_BY_ID, STARTER_OWNED_PART_IDS } from '../content';
 import {
+  CURRENT_PHYSICS_VERSION,
+  CURRENT_RULESET_VERSION,
+  DEFAULT_TRACK_VERSION,
+  type AssistPreset,
+  type SessionMode,
+  type TransmissionMode,
+  type VerificationLevel,
+} from '../contracts/simulation';
+import {
   DEFAULT_BALANCE_CONFIG,
   GlobalBalanceConfigSchema,
   type IAuthUser,
@@ -341,17 +350,57 @@ export class StorageSync {
   }
 
   /**
-   * Explicit Batched Mutation 3: Finish Lap & Partitioned Leaderboard Submit
+   * Explicit Batched Mutation 3: Finish Lap & Partitioned Official Time Trial Submit.
+   * Friend Race, AI Race, and AI-assisted runs stay strictly outside the official
+   * Time Trial leaderboard path. Local play and credits remain usable when offline.
    */
   public async recordCompletedLap(
-    payload: ILapFinishedPayload,
+    payload: ILapFinishedPayload & {
+      sessionMode?: SessionMode;
+      trackVersion?: string;
+      physicsVersion?: string;
+      rulesetVersion?: string;
+      weatherKey?: string;
+      assistPreset?: AssistPreset;
+      transmissionMode?: TransmissionMode;
+      checkpointMask?: number;
+      orderedCheckpointsHit?: number[];
+      buildSchemaVersion?: number;
+      buildContentHash?: string;
+    },
     baseTrackRewardCredits: number
-  ): Promise<{ creditsAwarded: number }> {
+  ): Promise<{
+    creditsAwarded: number;
+    recordedInLeaderboard: boolean;
+    verificationLevel: VerificationLevel;
+  }> {
+    const sessionMode: SessionMode = payload.sessionMode ?? 'time_trial';
+    const isOfficialTimeTrial =
+      sessionMode === 'time_trial' && !payload.isAiAssisted && payload.lapValid;
+
+    // Friend Race is strictly private and unranked; AI runs stay out of Time Trial records
     const payoutMult = this.balanceConfig.economy_bias.payout_mult;
     const aiPenalty = payload.isAiAssisted ? 0.35 : 1.0;
-    const localReward = payload.lapValid
-      ? Math.max(250, Math.round(baseTrackRewardCredits * payoutMult * aiPenalty))
-      : 0;
+    const localReward =
+      payload.lapValid && sessionMode !== 'friend_race'
+        ? Math.max(250, Math.round(baseTrackRewardCredits * payoutMult * aiPenalty))
+        : 0;
+
+    if (!payload.lapValid || !isOfficialTimeTrial) {
+      if (localReward > 0) {
+        this.state.credits += localReward;
+        await this.idbPut('garage', this.state);
+        this.events.emit('economy:updated', {
+          credits: this.state.credits,
+          ownedPartIds: this.state.ownedPartIds,
+        });
+      }
+      return {
+        creditsAwarded: localReward,
+        recordedInLeaderboard: false,
+        verificationLevel: 'local',
+      };
+    }
 
     if (!this.user) {
       this.state.credits += localReward;
@@ -360,10 +409,12 @@ export class StorageSync {
         credits: this.state.credits,
         ownedPartIds: this.state.ownedPartIds,
       });
-      return { creditsAwarded: localReward };
+      return {
+        creditsAwarded: localReward,
+        recordedInLeaderboard: false,
+        verificationLevel: 'local',
+      };
     }
-
-    if (!payload.lapValid) return { creditsAwarded: 0 };
 
     try {
       const res = await fetch('/api/laps', {
@@ -372,28 +423,47 @@ export class StorageSync {
         credentials: 'include',
         body: JSON.stringify({
           trackId: payload.trackId,
+          trackVersion: payload.trackVersion ?? DEFAULT_TRACK_VERSION,
           buildId: payload.buildId,
+          buildSchemaVersion: payload.buildSchemaVersion,
+          buildContentHash: payload.buildContentHash,
           chassisId: payload.chassisId,
           balanceVersionId: payload.balanceVersionId,
+          physicsVersion: payload.physicsVersion ?? CURRENT_PHYSICS_VERSION,
+          rulesetVersion: payload.rulesetVersion ?? CURRENT_RULESET_VERSION,
+          weatherKey: payload.weatherKey ?? 'clear_dry',
+          assistPreset: payload.assistPreset ?? 'beginner',
+          transmissionMode: payload.transmissionMode ?? 'auto',
+          sessionMode: 'time_trial',
           lapTimeMs: Math.round(payload.lapTimeMs),
           sectorTimesMs: payload.sectorTimesMs.map((s) => Math.round(s)),
+          checkpointMask: payload.checkpointMask,
+          orderedCheckpointsHit: payload.orderedCheckpointsHit,
           peakSpeedKph: payload.peakSpeedKph,
           pwrRatio: payload.pwrRatio,
-          isAiAssisted: payload.isAiAssisted,
+          isAiAssisted: false,
         }),
       });
       if (res.ok) {
-        const data = (await res.json()) as { credits: number; creditsAwarded: number };
+        const data = (await res.json()) as {
+          credits: number;
+          creditsAwarded: number;
+          verificationLevel?: VerificationLevel;
+        };
         this.state.credits = data.credits;
         await this.idbPut('garage', this.state);
         this.events.emit('economy:updated', {
           credits: this.state.credits,
           ownedPartIds: this.state.ownedPartIds,
         });
-        return { creditsAwarded: data.creditsAwarded };
+        return {
+          creditsAwarded: data.creditsAwarded,
+          recordedInLeaderboard: true,
+          verificationLevel: data.verificationLevel ?? 'sanity_checked',
+        };
       }
     } catch {
-      // Fallback credit award locally if offline
+      // Fallback credit award locally if offline — single-player play stays usable
     }
 
     this.state.credits += localReward;
@@ -402,16 +472,30 @@ export class StorageSync {
       credits: this.state.credits,
       ownedPartIds: this.state.ownedPartIds,
     });
-    return { creditsAwarded: localReward };
+    return {
+      creditsAwarded: localReward,
+      recordedInLeaderboard: false,
+      verificationLevel: 'local',
+    };
   }
 
   public async fetchLeaderboard(
     trackId: string,
-    balanceVersionId?: string
+    balanceVersionId?: string,
+    options?: {
+      trackVersion?: string;
+      physicsVersion?: string;
+      rulesetVersion?: string;
+      includeLegacy?: boolean;
+    }
   ): Promise<ILapLeaderboardEntry[]> {
     try {
       const qs = new URLSearchParams({ trackId });
       if (balanceVersionId) qs.set('version', balanceVersionId);
+      if (options?.trackVersion) qs.set('trackVersion', options.trackVersion);
+      if (options?.physicsVersion) qs.set('physicsVersion', options.physicsVersion);
+      if (options?.rulesetVersion) qs.set('rulesetVersion', options.rulesetVersion);
+      if (options?.includeLegacy) qs.set('includeLegacy', 'true');
       const res = await fetch(`/api/laps?${qs.toString()}`, { credentials: 'include' });
       if (!res.ok) return [];
       const data = (await res.json()) as { records: ILapLeaderboardEntry[] };
