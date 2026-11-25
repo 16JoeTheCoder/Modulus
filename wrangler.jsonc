@@ -26,14 +26,14 @@
     {
       "binding": "DB",
       "database_name": "modulus-db",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "28848c8b-7652-4613-b5af-cb02652e83cd",
       "migrations_dir": "migrations"
     }
   ],
   "kv_namespaces": [
     {
       "binding": "MODULUS_KV",
-      "id": "00000000000000000000000000000000"
+      "id": "57ad20faf1394246b46b6f96542e1f06"
     }
   ],
   "vars": {

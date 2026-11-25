@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { STARTER_OWNED_PART_IDS } from '../../src/content';
 import {
   RequestOtpBodySchema,
@@ -130,7 +130,65 @@ authRoutes.post('/verify-otp', async (c) => {
     );
   }
 
-  // Consume OTP & upsert user
+  return completeSignIn(c, email, [
+    c.env.DB.prepare('UPDATE otp_codes SET consumed_at = ? WHERE id = ?').bind(nowIso, otpRow.id),
+  ]);
+});
+
+authRoutes.get('/config', (c) => c.json({ googleClientId: c.env.GOOGLE_CLIENT_ID?.trim() || null }));
+
+authRoutes.post('/google', async (c) => {
+  const clientId = c.env.GOOGLE_CLIENT_ID?.trim();
+  if (!clientId) return c.json({ error: 'Google sign-in is not configured' }, 503);
+  const body = (await c.req.json().catch(() => null)) as { credential?: unknown } | null;
+  const credential = typeof body?.credential === 'string' ? body.credential : '';
+  if (!credential || credential.length > 4096) return c.json({ error: 'Missing Google credential' }, 400);
+
+  const res = await fetch(
+    `https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(credential)}`
+  );
+  if (!res.ok) return c.json({ error: 'Google sign-in failed' }, 401);
+  const info = (await res.json().catch(() => null)) as {
+    aud?: string;
+    iss?: string;
+    email?: string;
+    email_verified?: string | boolean;
+    exp?: string;
+  } | null;
+  const issOk = info?.iss === 'https://accounts.google.com' || info?.iss === 'accounts.google.com';
+  const verified = info?.email_verified === true || info?.email_verified === 'true';
+  if (!info || info.aud !== clientId || !issOk || !verified || !info.email) {
+    return c.json({ error: 'Google sign-in failed' }, 401);
+  }
+  return completeSignIn(c, info.email.trim().toLowerCase(), []);
+});
+
+
+authRoutes.get('/me', async (c) => {
+  const session = await resolveSession(c);
+  if (!session) {
+    return c.json({ authenticated: false, user: null });
+  }
+  return c.json({ authenticated: true, user: session.user });
+});
+
+authRoutes.post('/logout', async (c) => {
+  const session = await resolveSession(c);
+  if (session) {
+    await c.env.DB.prepare('DELETE FROM sessions WHERE id = ?')
+      .bind(session.sessionId)
+      .run();
+  }
+  c.header('Set-Cookie', buildClearSessionCookieHeader(c.req.url));
+  return c.json({ ok: true });
+});
+
+async function completeSignIn(
+  c: Context<HonoEnv>,
+  email: string,
+  preStatements: D1PreparedStatement[]
+) {
+  const nowIso = new Date().toISOString();
   const activeConfig = await getActiveBalanceConfig(c.env);
   const shouldBeAdmin = isAdminEmail(email, c.env);
 
@@ -141,9 +199,7 @@ authRoutes.post('/verify-otp', async (c) => {
     .first<UserRow>();
 
   let user: IAuthUser;
-  const statements: D1PreparedStatement[] = [
-    c.env.DB.prepare('UPDATE otp_codes SET consumed_at = ? WHERE id = ?').bind(nowIso, otpRow.id),
-  ];
+  const statements: D1PreparedStatement[] = [...preStatements];
 
   if (!existingUser) {
     const newUserId = `usr_${crypto.randomUUID()}`;
@@ -215,23 +271,4 @@ authRoutes.post('/verify-otp', async (c) => {
   const garage = await getUserGarageSync(c.env.DB, user);
   c.header('Set-Cookie', buildSessionCookieHeader(sessionToken, ttlSeconds, c.req.url));
   return c.json(garage);
-});
-
-authRoutes.get('/me', async (c) => {
-  const session = await resolveSession(c);
-  if (!session) {
-    return c.json({ authenticated: false, user: null });
-  }
-  return c.json({ authenticated: true, user: session.user });
-});
-
-authRoutes.post('/logout', async (c) => {
-  const session = await resolveSession(c);
-  if (session) {
-    await c.env.DB.prepare('DELETE FROM sessions WHERE id = ?')
-      .bind(session.sessionId)
-      .run();
-  }
-  c.header('Set-Cookie', buildClearSessionCookieHeader(c.req.url));
-  return c.json({ ok: true });
-});
+}
