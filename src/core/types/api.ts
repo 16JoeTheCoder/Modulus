@@ -25,11 +25,24 @@ export const PurchasePartBodySchema = z.object({
 
 export const SubmitLapBodySchema = z.object({
   trackId: z.string().min(1).max(60),
+  trackVersion: z.string().min(1).max(40).optional(),
   buildId: z.string().min(1).max(80).optional(),
+  buildSchemaVersion: z.number().int().min(1).max(100).optional(),
+  buildContentHash: z.string().min(1).max(80).optional(),
   chassisId: z.string().min(1).max(60),
   balanceVersionId: z.string().min(1).max(40),
+  physicsVersion: z.string().min(1).max(40).optional(),
+  rulesetVersion: z.string().min(1).max(40).optional(),
+  weatherKey: z.string().min(1).max(40).optional(),
+  assistPreset: z.enum(['beginner', 'sport', 'pro', 'legacy']).optional(),
+  transmissionMode: z.enum(['auto', 'manual']).optional(),
+  sessionMode: z
+    .enum(['practice', 'time_trial', 'drift', 'ai_race', 'friend_race', 'royal_prix'])
+    .optional(),
   lapTimeMs: z.number().int().min(5000).max(3_600_000),
-  sectorTimesMs: z.tuple([z.number(), z.number(), z.number()]),
+  sectorTimesMs: z.array(z.number().finite().positive()).min(1).max(16),
+  checkpointMask: z.number().int().min(0).optional(),
+  orderedCheckpointsHit: z.array(z.number().int().min(0)).max(64).optional(),
   peakSpeedKph: z.number().min(0).max(650),
   pwrRatio: z.number().min(0).max(5),
   isAiAssisted: z.boolean(),
@@ -74,7 +87,16 @@ export interface ILapLeaderboardEntry {
   userId: string;
   emailMasked: string;
   trackId: string;
+  trackVersion: string;
   balanceVersionId: string;
+  physicsVersion: string;
+  rulesetVersion: string;
+  weatherKey: string;
+  assistPreset: string;
+  transmissionMode: string;
+  sessionMode: string;
+  verificationLevel: 'unverified' | 'local' | 'sanity_checked' | 'verified';
+  isLegacyVersion?: boolean;
   lapTimeMs: number;
   sectorTimesMs: number[];
   chassisId: string;
