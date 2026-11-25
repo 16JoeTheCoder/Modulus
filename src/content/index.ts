@@ -11,6 +11,10 @@ import switchyardSprintData from './tracks/switchyard_sprint.json';
 import dockyardDriftParkData from './tracks/dockyard_drift_park.json';
 import copperCreekCrossData from './tracks/copper_creek_cross.json';
 import terasSwitchbackData from './tracks/teras_switchback.json';
+import tanjungCoastData from './tracks/tanjung_coast.json';
+import quarryTraverseData from './tracks/quarry_traverse.json';
+import telagaRidgeLongData from './tracks/telaga_ridge_long.json';
+import basaltHighlandsData from './tracks/basalt_highlands.json';
 import gpCircuitData from './tracks/gp_circuit.json';
 import mountainPassData from './tracks/mountain_pass.json';
 import ovalTestData from './tracks/oval_test.json';
@@ -31,19 +35,30 @@ export const PARTS_CATALOG: IPartSchema[] = [
 
 export const TRACKS_CATALOG: ITrackSplineSchema[] = [
   switchyardSprintData as unknown as ITrackSplineSchema,
+  dockyardDriftParkData as unknown as ITrackSplineSchema,
+  copperCreekCrossData as unknown as ITrackSplineSchema,
+  terasSwitchbackData as unknown as ITrackSplineSchema,
   gpCircuitData as unknown as ITrackSplineSchema,
   mountainPassData as unknown as ITrackSplineSchema,
   ovalTestData as unknown as ITrackSplineSchema,
 ];
 
 /**
- * Staged courses validated for geometry/clearance but not yet promoted to the playable catalog.
+ * Staged rally endurance routes validated for <=2 m sampling, terrain clearance,
+ * and Rapier trimesh performance — held out of TRACKS_CATALOG until full endurance playtests.
  */
 export const STAGED_TRACKS: ITrackSplineSchema[] = [
-  dockyardDriftParkData as unknown as ITrackSplineSchema,
-  copperCreekCrossData as unknown as ITrackSplineSchema,
-  terasSwitchbackData as unknown as ITrackSplineSchema,
+  tanjungCoastData as unknown as ITrackSplineSchema,
+  quarryTraverseData as unknown as ITrackSplineSchema,
+  telagaRidgeLongData as unknown as ITrackSplineSchema,
+  basaltHighlandsData as unknown as ITrackSplineSchema,
 ];
+
+export function isDriftCourse(track: ITrackSplineSchema): boolean {
+  return Boolean(
+    track.courseTags?.includes('drift') && !track.courseTags?.includes('endurance')
+  );
+}
 
 export const PARTS_BY_ID = new Map<string, IPartSchema>(
   PARTS_CATALOG.map((part) => [part.id, part])

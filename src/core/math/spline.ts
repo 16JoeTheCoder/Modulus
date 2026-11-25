@@ -31,9 +31,13 @@ export interface ISplineSample {
 export const TRACK_KERB_WIDTH_M = 1.05;
 export const TRACK_RUNOFF_WIDTH_M = 5.4;
 
+/** Maximum allowed 3D arc-length spacing between adjacent spline samples on any course. */
+export const MAX_SAMPLE_STEP_M = 2.0;
+const TARGET_STRAIGHT_STEP_M = 1.85;
+const TARGET_CORNER_STEP_M = 1.15;
+const MAX_TURN_ANGLE_PER_STEP_RAD = 0.045; // ~2.6 deg max heading change per segment
 const DEFAULT_MIN_SAMPLES = 480;
-const DEFAULT_MAX_SAMPLES = 4096;
-const TARGET_SAMPLE_SPACING_M = 2.0;
+const DEFAULT_MAX_SAMPLES = 12000;
 
 /**
  * Checks if a normalized spline parameter `t` in [0..1) lies inside [startT, endT].
@@ -51,8 +55,9 @@ export function isProgressInSpan(t: number, startT: number, endT: number): boole
 }
 
 /**
- * Computes a deterministic recommended sample count based on approximate 3D route length
- * so short courses (~1.2-2 km) sample at ~2 m spacing and long endurance routes stay fine.
+ * Computes a deterministic recommended sample count based on approximate 3D route length.
+ * Used as a floor/estimate; actual `TrackSpline` default sampling uses curvature-weighted
+ * per-segment subdivision guaranteeing every step stays <= 2.0 m even on 13.2 km endurance routes.
  */
 export function computeRecommendedSampleCount(schema: ITrackSplineSchema): number {
   const pts = schema.controlPoints;
@@ -63,10 +68,8 @@ export function computeRecommendedSampleCount(schema: ITrackSplineSchema): numbe
     const b = pts[(i + 1) % pts.length];
     polyLen += Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
   }
-  // Catmull-Rom curve is slightly longer than control polygon
   const estLen = polyLen * 1.04;
-  const raw = Math.ceil(estLen / TARGET_SAMPLE_SPACING_M);
-  // Align to multiple of 4 for clean decimation/post cadence
+  const raw = Math.ceil(estLen / TARGET_STRAIGHT_STEP_M);
   const aligned = Math.ceil(raw / 4) * 4;
   return Math.max(DEFAULT_MIN_SAMPLES, Math.min(DEFAULT_MAX_SAMPLES, aligned));
 }
@@ -135,12 +138,13 @@ export function resolveTrackZones(schema: ITrackSplineSchema): ITrackZoneMeta[] 
 }
 
 /**
- * Deterministic 32-bit FNV-1a geometry hash over canonical track geometry + version + sampleCount.
+ * Deterministic 32-bit FNV-1a geometry hash over canonical track geometry + version + sampling mode.
  * Used to pair render & collision handles 1:1 and partition replays/leaderboards.
  */
 export function computeTrackGeometryHash(
   schema: ITrackSplineSchema,
-  sampleCount: number
+  sampleCount: number,
+  samplingMode: 'adaptive' | 'uniform' = 'adaptive'
 ): string {
   const trackVersion = normalizeTrackVersion(schema.trackVersion);
   const payload = JSON.stringify({
@@ -150,6 +154,7 @@ export function computeTrackGeometryHash(
     w: schema.defaultWidthM,
     sf: schema.sectorFractions,
     n: sampleCount,
+    m: samplingMode,
     pts: schema.controlPoints.map((p) => [
       p.x,
       p.y,
@@ -224,6 +229,125 @@ function rotateAroundAxis(v: Vec3, axis: Vec3, angleRad: number): Vec3 {
 }
 
 /**
+ * Evaluates raw Catmull-Rom 3D position and unit tangent at spline parameter `t` in [0..1).
+ */
+function evalCatmullRomPosAndTangent(
+  pts: ITrackControlPoint[],
+  t: number
+): { position: Vec3; tangent: Vec3; segIdx: number; u: number } {
+  const n = pts.length;
+  const wrapped = ((t % 1) + 1) % 1;
+  const segFloat = wrapped * n;
+  const segIdx = Math.floor(segFloat) % n;
+  const u = segFloat - Math.floor(segFloat);
+
+  const p0 = pts[(segIdx - 1 + n) % n];
+  const p1 = pts[segIdx];
+  const p2 = pts[(segIdx + 1) % n];
+  const p3 = pts[(segIdx + 2) % n];
+
+  const position: Vec3 = {
+    x: catmullRomScalar(p0.x, p1.x, p2.x, p3.x, u),
+    y: catmullRomScalar(p0.y, p1.y, p2.y, p3.y, u),
+    z: catmullRomScalar(p0.z, p1.z, p2.z, p3.z, u),
+  };
+  const deriv: Vec3 = {
+    x: catmullRomDerivativeScalar(p0.x, p1.x, p2.x, p3.x, u),
+    y: catmullRomDerivativeScalar(p0.y, p1.y, p2.y, p3.y, u),
+    z: catmullRomDerivativeScalar(p0.z, p1.z, p2.z, p3.z, u),
+  };
+  return { position, tangent: normalizeVec3(deriv), segIdx, u };
+}
+
+/**
+ * Builds a strictly monotonic list of spline parameters `t` in [0..1) using
+ * curvature-weighted per-segment subdivision + guaranteed chord refinement so
+ * EVERY adjacent sample interval is strictly <= MAX_SAMPLE_STEP_M (2.0 m)
+ * and tight bends / crests receive finer angular resolution (~1.15 m / <= 2.6 deg).
+ */
+function buildCurvatureWeightedParams(pts: ITrackControlPoint[]): number[] {
+  const n = pts.length;
+  const probeSteps = 12;
+  const params: number[] = [];
+
+  for (let segIdx = 0; segIdx < n; segIdx++) {
+    const tStart = segIdx / n;
+    const tSpan = 1 / n;
+
+    // 1. Measure segment arc length, peak chord speed, and total heading turn angle
+    let segLen = 0;
+    let totalTurnRad = 0;
+    let maxProbeSpeedRatio = 1.0;
+    const probeLens: number[] = [];
+    let prev = evalCatmullRomPosAndTangent(pts, tStart);
+    for (let k = 1; k <= probeSteps; k++) {
+      const tk = tStart + (k / probeSteps) * tSpan;
+      const curr = evalCatmullRomPosAndTangent(pts, tk === 1 ? 0 : tk);
+      const ds = Math.hypot(
+        curr.position.x - prev.position.x,
+        curr.position.y - prev.position.y,
+        curr.position.z - prev.position.z
+      );
+      probeLens.push(ds);
+      segLen += ds;
+      const cosAng = Math.max(
+        -1,
+        Math.min(
+          1,
+          prev.tangent.x * curr.tangent.x +
+            prev.tangent.y * curr.tangent.y +
+            prev.tangent.z * curr.tangent.z
+        )
+      );
+      totalTurnRad += Math.acos(cosAng);
+      prev = curr;
+    }
+
+    const avgProbeLen = Math.max(1e-4, segLen / probeSteps);
+    for (let k = 0; k < probeLens.length; k++) {
+      const ratio = probeLens[k] / avgProbeLen;
+      if (ratio > maxProbeSpeedRatio) maxProbeSpeedRatio = ratio;
+    }
+
+    const avgCurv = segLen > 1e-4 ? totalTurnRad / segLen : 0;
+    const targetStepM =
+      avgCurv >= 0.02
+        ? TARGET_CORNER_STEP_M
+        : avgCurv >= 0.01
+        ? (TARGET_CORNER_STEP_M + TARGET_STRAIGHT_STEP_M) * 0.5
+        : TARGET_STRAIGHT_STEP_M;
+
+    const byDist = Math.ceil((segLen * Math.min(1.5, maxProbeSpeedRatio)) / targetStepM);
+    const byTurn = Math.ceil(totalTurnRad / MAX_TURN_ANGLE_PER_STEP_RAD);
+    const subSteps = Math.max(4, byDist, byTurn);
+
+    for (let k = 0; k < subSteps; k++) {
+      params.push(tStart + (k / subSteps) * tSpan);
+    }
+  }
+
+  // 2. Final safety refinement pass: split any interval whose 3D chord exceeds 1.96 m
+  const refined: number[] = [];
+  const count = params.length;
+  for (let i = 0; i < count; i++) {
+    const t0 = params[i];
+    const t1 = i === count - 1 ? 1.0 : params[i + 1];
+    const p0 = evalCatmullRomPosAndTangent(pts, t0).position;
+    const p1 = evalCatmullRomPosAndTangent(pts, t1 === 1.0 ? 0 : t1).position;
+    const ds = Math.hypot(p1.x - p0.x, p1.y - p0.y, p1.z - p0.z);
+    refined.push(t0);
+    if (ds > MAX_SAMPLE_STEP_M - 0.04) {
+      const extraSplits = Math.ceil(ds / (MAX_SAMPLE_STEP_M - 0.1));
+      for (let s = 1; s < extraSplits; s++) {
+        refined.push(t0 + ((t1 - t0) * s) / extraSplits);
+      }
+    }
+  }
+
+  return refined;
+}
+
+/**
  * Converts basis vectors (left, up, forward) into a unit quaternion.
  * MODULUS Standard Right-Handed Basis:
  * Local +X = Left (`up x forward`), Local +Y = Up, Local +Z = Forward.
@@ -276,11 +400,12 @@ export function basisToQuaternion(left: Vec3, up: Vec3, forward: Vec3): Quat {
 /**
  * Banked 3D Closed Catmull-Rom Track Spline.
  * Single canonical geometry source shared identically by track-generator (render + collision),
- * physics-rapier, LapSectorTimer, previews, and ai-test-driver.
+ * physics-rapier, LapSectorTimer, DriftScorer, previews, and ai-test-driver.
  */
 export class TrackSpline {
   public readonly schema: ITrackSplineSchema;
   public readonly sampleCount: number;
+  public readonly samplingMode: 'adaptive' | 'uniform';
   public readonly samples: ISplineSample[];
   public readonly totalLengthM: number;
   public readonly sectors: ITrackSectorMeta[];
@@ -289,19 +414,28 @@ export class TrackSpline {
 
   constructor(schema: ITrackSplineSchema, sampleCount?: number) {
     this.schema = schema;
-    const count =
-      sampleCount && sampleCount >= 64
-        ? sampleCount
-        : computeRecommendedSampleCount(schema);
-    this.sampleCount = count;
     this.sectors = resolveTrackSectors(schema);
     this.zones = resolveTrackZones(schema);
-    this.geometryHash = computeTrackGeometryHash(schema, count);
 
     const pts = schema.controlPoints;
     const n = pts.length;
-    const hasExplicitKerbs = pts.some((p) => Boolean(p.kerbLeft || p.kerbRight));
+    let tParams: number[];
+    if (sampleCount && sampleCount >= 64) {
+      this.samplingMode = 'uniform';
+      tParams = new Array<number>(sampleCount);
+      for (let i = 0; i < sampleCount; i++) {
+        tParams[i] = i / sampleCount;
+      }
+    } else {
+      this.samplingMode = 'adaptive';
+      tParams = buildCurvatureWeightedParams(pts);
+    }
 
+    const count = tParams.length;
+    this.sampleCount = count;
+    this.geometryHash = computeTrackGeometryHash(schema, count, this.samplingMode);
+
+    const hasExplicitKerbs = pts.some((p) => Boolean(p.kerbLeft || p.kerbRight));
     const passingZones = this.zones.filter((z) => z.kind === 'passing');
     const driftZones = this.zones.filter((z) => z.kind === 'drift');
     const surfaceZones = this.zones.filter((z) => z.kind === 'surface' && z.surface);
@@ -327,29 +461,14 @@ export class TrackSpline {
     let prevPos: Vec3 | null = null;
 
     for (let i = 0; i < count; i++) {
-      const t = i / count;
-      const segFloat = t * n;
-      const segIdx = Math.floor(segFloat) % n;
-      const u = segFloat - Math.floor(segFloat);
+      const t = tParams[i];
+      const { position, tangent, segIdx, u } = evalCatmullRomPosAndTangent(pts, t);
 
       const p0: ITrackControlPoint = pts[(segIdx - 1 + n) % n];
       const p1: ITrackControlPoint = pts[segIdx];
       const p2: ITrackControlPoint = pts[(segIdx + 1) % n];
       const p3: ITrackControlPoint = pts[(segIdx + 2) % n];
 
-      const position: Vec3 = {
-        x: catmullRomScalar(p0.x, p1.x, p2.x, p3.x, u),
-        y: catmullRomScalar(p0.y, p1.y, p2.y, p3.y, u),
-        z: catmullRomScalar(p0.z, p1.z, p2.z, p3.z, u),
-      };
-
-      const deriv: Vec3 = {
-        x: catmullRomDerivativeScalar(p0.x, p1.x, p2.x, p3.x, u),
-        y: catmullRomDerivativeScalar(p0.y, p1.y, p2.y, p3.y, u),
-        z: catmullRomDerivativeScalar(p0.z, p1.z, p2.z, p3.z, u),
-      };
-
-      const tangent = normalizeVec3(deriv);
       const worldUp: Vec3 = { x: 0, y: 1, z: 0 };
       const flatRight = normalizeVec3(crossVec3(tangent, worldUp));
       const unbankedUp = normalizeVec3(crossVec3(flatRight, tangent));
@@ -422,7 +541,6 @@ export class TrackSpline {
       let kerbLeft = s.kerbLeft;
       let kerbRight = s.kerbRight;
       if (!hasExplicitKerbs && !s.inPassingZone && s.surface === 'tarmac' && curvature >= 0.015) {
-        // turnSign < 0 => left bend (inside apex on left); turnSign > 0 => right bend (inside apex on right)
         if (signedCurvature < 0) kerbLeft = true;
         else kerbRight = true;
       }
@@ -437,16 +555,38 @@ export class TrackSpline {
     });
   }
 
+  /**
+   * Binary-searches `samples[i].t` for the largest index with `samples[i].t <= wrapped(t)`.
+   */
+  public indexAtProgress(t: number): number {
+    const wrapped = ((t % 1) + 1) % 1;
+    const count = this.samples.length;
+    if (count === 0) return 0;
+    let lo = 0;
+    let hi = count - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >>> 1;
+      if (this.samples[mid].t <= wrapped) {
+        lo = mid;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    return lo;
+  }
+
   public sampleAtProgress(t: number): ISplineSample {
     const wrapped = ((t % 1) + 1) % 1;
     const count = this.samples.length;
-    const floatIdx = wrapped * count;
-    const i0 = Math.floor(floatIdx) % count;
+    const i0 = this.indexAtProgress(wrapped);
     const i1 = (i0 + 1) % count;
-    const frac = floatIdx - Math.floor(floatIdx);
     const a = this.samples[i0];
     const b = this.samples[i1];
 
+    const t0 = a.t;
+    const t1 = i1 === 0 ? 1.0 : b.t;
+    const tSpan = Math.max(1e-9, t1 - t0);
+    const frac = Math.max(0, Math.min(1, (wrapped - t0) / tSpan));
     const distB = i1 === 0 ? this.totalLengthM : b.distanceM;
 
     const position: Vec3 = {
@@ -509,11 +649,15 @@ export class TrackSpline {
       }
     }
 
-    const d0 = this.samples[lo].distanceM;
-    const d1 = lo === count - 1 ? len : this.samples[lo + 1].distanceM;
+    const a = this.samples[lo];
+    const nextIdx = (lo + 1) % count;
+    const d0 = a.distanceM;
+    const d1 = lo === count - 1 ? len : this.samples[nextIdx].distanceM;
+    const t0 = a.t;
+    const t1 = lo === count - 1 ? 1.0 : this.samples[nextIdx].t;
     const span = Math.max(1e-6, d1 - d0);
     const frac = Math.max(0, Math.min(1, (d - d0) / span));
-    return ((lo + frac) / count) % 1;
+    return (t0 + (t1 - t0) * frac) % 1;
   }
 
   public findClosestSample(
@@ -529,8 +673,8 @@ export class TrackSpline {
     let bestDistSq = Infinity;
 
     if (hintProgress !== undefined) {
-      const center = Math.floor((((hintProgress % 1) + 1) % 1) * n);
-      const windowRadius = Math.max(32, Math.ceil(n * 0.08));
+      const center = this.indexAtProgress(hintProgress);
+      const windowRadius = Math.max(48, Math.min(256, Math.ceil(n * 0.06)));
       for (let offset = -windowRadius; offset <= windowRadius; offset++) {
         const idx = (center + offset + n) % n;
         const s = this.samples[idx];
