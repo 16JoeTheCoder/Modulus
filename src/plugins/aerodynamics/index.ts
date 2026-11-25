@@ -126,12 +126,15 @@ export class AerodynamicsPlugin implements IModulusPlugin {
     const wingCl = Math.max(0, vehicle.liftCoefficientRearCl - diffuserCl);
     const effectiveRearCl = wingCl + diffuserCl * diffuserEfficiency;
 
-    const downforceFrontN = qDown * vehicle.liftCoefficientFrontCl * downforceBias;
-    const downforceRearN = qDown * effectiveRearCl * downforceBias;
+    const frontAeroHealth = 1 - clamp(state.damageZones[4] ?? 0, 0, 1) * 0.45;
+    const rearAeroHealth = 1 - clamp(state.damageZones[5] ?? 0, 0, 1) * 0.45;
+    const downforceFrontN = qDown * vehicle.liftCoefficientFrontCl * downforceBias * frontAeroHealth;
+    const downforceRearN = qDown * effectiveRearCl * downforceBias * rearAeroHealth;
     const downforceTotalN = downforceFrontN + downforceRearN;
 
-    // Aerodynamic drag opposing 3D velocity vector (slightly higher Cd when sliding sideways)
-    const effectiveCd = vehicle.dragCoefficientCd * (1 + yawSlipFrac * 0.35);
+    // Aerodynamic drag opposing 3D velocity vector (slightly higher Cd when sliding sideways or damaged)
+    const bodyDamageDrag = 1 + ((state.damageZones[4] ?? 0) + (state.damageZones[5] ?? 0)) * 0.08;
+    const effectiveCd = vehicle.dragCoefficientCd * (1 + yawSlipFrac * 0.35) * bodyDamageDrag;
     const qDrag = 0.5 * AIR_DENSITY_KG_M3 * speedMs * speedMs * vehicle.frontalAreaM2;
     const dragForceN = qDrag * effectiveCd * dragBias;
 

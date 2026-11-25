@@ -4,6 +4,7 @@ import type {
   IModulusPlugin,
   IVehicleRuntimeState,
 } from '../../core/types';
+import { computeSpeedSteerAuthority } from '../input-keyboard/inputShaper';
 
 type TouchZone = 'steer' | 'brake' | 'throttle' | 'handbrake';
 
@@ -266,7 +267,7 @@ class InputTouchController {
     this.targetHandbrake = handbrake;
   }
 
-  public step(dt: number, state: IVehicleRuntimeState, _input: IInputState): void {
+  public step(dt: number, state: IVehicleRuntimeState, input: IInputState): void {
     if (!this.ctx) return;
 
     if (!this.enabled || this.ctx.getVisualMode() !== 'track') {
@@ -276,6 +277,8 @@ class InputTouchController {
       }
       return;
     }
+
+    if (state.aiEnabled) return;
 
     // Only write when touch has active contacts or is decaying back to zero
     const hasActive =
@@ -287,14 +290,12 @@ class InputTouchController {
 
     if (!hasActive) return;
 
-    const speedKph = Math.max(0, state.speedKph);
-    const speedTaper =
-      speedKph <= 90 ? 1.0 : clamp(1.0 - ((speedKph - 90) / 220) * 0.52, 0.45, 1.0);
-
+    const speedTaper = computeSpeedSteerAuthority(state.speedMs);
     const steerGoal = this.targetSteer * speedTaper;
     const alphaSteer = clamp(dt * 16, 0, 1);
     const alphaPedal = clamp(dt * 18, 0, 1);
 
+    const prevBrake = this.smoothBrake;
     this.smoothSteer += (steerGoal - this.smoothSteer) * alphaSteer;
     this.smoothThrottle += (this.targetThrottle - this.smoothThrottle) * alphaPedal;
     this.smoothBrake += (this.targetBrake - this.smoothBrake) * alphaPedal;
@@ -305,11 +306,28 @@ class InputTouchController {
     if (this.smoothBrake < 0.002 && this.targetBrake === 0) this.smoothBrake = 0;
     if (this.smoothHandbrake < 0.002 && this.targetHandbrake === 0) this.smoothHandbrake = 0;
 
+    const steerOut = clamp(this.smoothSteer, -1, 1);
+    const throttleOut = clamp(this.smoothThrottle, 0, 1);
+    const brakeOut = clamp(this.smoothBrake, 0, 1);
+    const handbrakeOut = clamp(this.smoothHandbrake, 0, 1);
+    const freshBrake = prevBrake < 0.08 && this.targetBrake > 0.2;
+
+    state.rawSteerInput = this.targetSteer;
+    state.commandedSteer = steerOut;
+
+    input.steer = steerOut;
+    input.throttle = throttleOut;
+    input.brake = brakeOut;
+    input.handbrake = handbrakeOut;
+    input.clutch = 0;
+    if (freshBrake) input.brakeFreshPress = true;
+    input.inputSource = 'touch';
+
     this.ctx.setHardwareInput('touch', {
-      steer: clamp(this.smoothSteer, -1, 1),
-      throttle: clamp(this.smoothThrottle, 0, 1),
-      brake: clamp(this.smoothBrake, 0, 1),
-      handbrake: clamp(this.smoothHandbrake, 0, 1),
+      steer: steerOut,
+      throttle: throttleOut,
+      brake: brakeOut,
+      handbrake: handbrakeOut,
       clutch: 0,
       inputSource: 'touch',
     });

@@ -1,5 +1,10 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import {
+  surfaceCodeToType as contractSurfaceCodeToType,
+  type DamageZoneId,
+  type IVehicleImpactPulse,
+} from '../../contracts/simulation';
+import {
   DEFAULT_BALANCE_CONFIG,
   type ICompiledVehicle,
   type IEngineContext,
@@ -96,10 +101,35 @@ function localToWorld(state: IVehicleRuntimeState, local: Vec3): Vec3 {
 }
 
 function surfaceCodeToType(code: number): SurfaceType {
-  if (code === 1) return 'kerb';
-  if (code === 2) return 'grass';
-  if (code === 3) return 'gravel';
-  return 'tarmac';
+  return contractSurfaceCodeToType(code);
+}
+
+function classifyImpactDamageZone(localDir: Vec3): { zone: DamageZoneId; zoneIndex: number; secondaryIndex?: number } {
+  // localDir points along the sudden impulse (direction the chassis was shoved in car-local space: +X left, +Y up, +Z forward)
+  // A front wall impact shoves the car backward (-Z). A left-wall hit shoves the car right (-X).
+  const ax = Math.abs(localDir.x);
+  const az = Math.abs(localDir.z);
+  if (az >= ax * 1.15) {
+    if (localDir.z <= 0) {
+      // Front hit (also affects cooling on harder hits)
+      return { zone: 'front', zoneIndex: 4, secondaryIndex: 8 };
+    }
+    return { zone: 'rear', zoneIndex: 5, secondaryIndex: 9 };
+  }
+  if (ax >= az * 1.15) {
+    if (localDir.x < 0) {
+      // Hit on Left side (shoved right = -X)
+      return { zone: 'left_side', zoneIndex: 6 };
+    }
+    return { zone: 'right_side', zoneIndex: 7 };
+  }
+  // Corner hit: classify into wheel corners (0: FL, 1: FR, 2: RL, 3: RR)
+  const isFront = localDir.z <= 0;
+  const isLeft = localDir.x < 0;
+  if (isFront && isLeft) return { zone: 'wheel_fl', zoneIndex: 0, secondaryIndex: 4 };
+  if (isFront && !isLeft) return { zone: 'wheel_fr', zoneIndex: 1, secondaryIndex: 4 };
+  if (!isFront && isLeft) return { zone: 'wheel_rl', zoneIndex: 2, secondaryIndex: 5 };
+  return { zone: 'wheel_rr', zoneIndex: 3, secondaryIndex: 5 };
 }
 
 const FIXED_DEFAULT_DT = 1 / 120;
@@ -132,6 +162,9 @@ export class PhysicsRapierPlugin implements IModulusPlugin {
   private appliedInertiaBias = 1.0;
   private vehicleCompiledInertiaBias = 1.0;
   private prevLinvel: Vec3 = { x: 0, y: 0, z: 0 };
+  private expectedDeltaV: Vec3 = { x: 0, y: 0, z: 0 };
+  private impactSeq = 0;
+  private impactCooldownS = 0;
   private prevWheelCompression: [number, number, number, number] = [0, 0, 0, 0];
   private prevWheelGrounded: [boolean, boolean, boolean, boolean] = [false, false, false, false];
 
@@ -198,16 +231,12 @@ export class PhysicsRapierPlugin implements IModulusPlugin {
 
     this.chassisBody = this.world.createRigidBody(bodyDesc);
 
-    // Upper-body collider sits at local y = [0.30 .. 0.98] so wheels raycast cleanly without belly-scraping kerbs
-    const halfW = vehicle.trackWidthM * 0.44;
-    const halfH = 0.34;
-    const halfL = vehicle.wheelbaseM * 0.76;
-
-    const colDesc = RAPIER.ColliderDesc.cuboid(halfW, halfH, halfL)
-      .setTranslation(0, 0.64, 0)
+    const hull = vehicle.collisionHull;
+    const colDesc = RAPIER.ColliderDesc.cuboid(hull.halfExtents.x, hull.halfExtents.y, hull.halfExtents.z)
+      .setTranslation(hull.localOffset.x, hull.localOffset.y, hull.localOffset.z)
       .setDensity(0) // Explicit mass & inertia tensor controlled via setAdditionalMassProperties
-      .setFriction(0.15)
-      .setRestitution(0.12);
+      .setFriction(hull.friction)
+      .setRestitution(hull.restitution);
 
     this.chassisCollider = this.world.createCollider(colDesc, this.chassisBody);
     this.applyMassAndColliderDimensions(vehicle, state.fuelLiters, this.balanceConfig.physics_bias.weight_inertia_mult);
@@ -240,9 +269,9 @@ export class PhysicsRapierPlugin implements IModulusPlugin {
 
     if (this.chassisCollider) {
       this.chassisCollider.setHalfExtents({
-        x: vehicle.trackWidthM * 0.44,
-        y: 0.34,
-        z: vehicle.wheelbaseM * 0.76,
+        x: vehicle.collisionHull.halfExtents.x,
+        y: vehicle.collisionHull.halfExtents.y,
+        z: vehicle.collisionHull.halfExtents.z,
       });
     }
 
@@ -305,6 +334,8 @@ export class PhysicsRapierPlugin implements IModulusPlugin {
     this.chassisBody.resetTorques(true);
 
     this.prevLinvel = { x: 0, y: 0, z: 0 };
+    this.expectedDeltaV = { x: 0, y: 0, z: 0 };
+    this.impactCooldownS = 0;
     this.prevWheelCompression = [0, 0, 0, 0];
     this.prevWheelGrounded = [false, false, false, false];
 
@@ -373,12 +404,20 @@ export class PhysicsRapierPlugin implements IModulusPlugin {
     }
 
     // 3. Apply accumulated forces, torques, and point forces to Rapier RigidBody
+    //    and track total non-contact force to distinguish genuine wall/car impact impulses.
     body.resetForces(true);
     body.resetTorques(true);
+
+    let sumFx = 0;
+    let sumFy = -9.81 * liveMassKg;
+    let sumFz = 0;
 
     const fAcc = state.forceAccumulatorWorld;
     if (isFiniteVec3(fAcc) && (fAcc.x !== 0 || fAcc.y !== 0 || fAcc.z !== 0)) {
       body.addForce({ x: fAcc.x, y: fAcc.y, z: fAcc.z }, true);
+      sumFx += fAcc.x;
+      sumFy += fAcc.y;
+      sumFz += fAcc.z;
     }
 
     const tAcc = state.torqueAccumulatorWorld;
@@ -395,8 +434,16 @@ export class PhysicsRapierPlugin implements IModulusPlugin {
           { x: pf.pointWorld.x, y: pf.pointWorld.y, z: pf.pointWorld.z },
           true
         );
+        sumFx += pf.forceWorld.x;
+        sumFy += pf.forceWorld.y;
+        sumFz += pf.forceWorld.z;
       }
     }
+
+    const invMass = 1 / Math.max(550, liveMassKg);
+    this.expectedDeltaV.x = sumFx * invMass * dt;
+    this.expectedDeltaV.y = sumFy * invMass * dt;
+    this.expectedDeltaV.z = sumFz * invMass * dt;
 
     // Clear accumulators for the next tick
     fAcc.x = 0;
@@ -479,8 +526,13 @@ export class PhysicsRapierPlugin implements IModulusPlugin {
     state.localVelocity.z = dot(state.linearVelocityWorld, state.forwardWorld);
 
     state.speedMs = Math.hypot(linvel.x, linvel.y, linvel.z);
+    state.forwardSpeedMs = state.localVelocity.z;
     state.speedKph = state.speedMs * 3.6;
     state.yawRateRadS = dot(state.angularVelocityWorld, state.upWorld);
+    state.bodySlipAngleRad =
+      Math.abs(state.localVelocity.z) > 1.0
+        ? Math.atan2(state.localVelocity.x, Math.abs(state.localVelocity.z))
+        : 0;
 
     if (isReset) {
       state.longitudinalG = 0;
@@ -489,6 +541,58 @@ export class PhysicsRapierPlugin implements IModulusPlugin {
       this.prevLinvel.y = linvel.y;
       this.prevLinvel.z = linvel.z;
       return;
+    }
+
+    // Impact pulse detection & car-local 10-zone progressive damage
+    if (this.impactCooldownS > 0) {
+      this.impactCooldownS = Math.max(0, this.impactCooldownS - dt);
+    }
+    const unexpectedDv: Vec3 = {
+      x: linvel.x - this.prevLinvel.x - this.expectedDeltaV.x,
+      y: linvel.y - this.prevLinvel.y - this.expectedDeltaV.y,
+      z: linvel.z - this.prevLinvel.z - this.expectedDeltaV.z,
+    };
+    const horizImpactDv = Math.hypot(unexpectedDv.x, unexpectedDv.z);
+    if (horizImpactDv > 1.35 && this.impactCooldownS <= 0) {
+      const intensity01 = clamp((horizImpactDv - 1.35) / 14.0, 0.08, 1.0);
+      const invDv = 1 / Math.max(1e-4, Math.hypot(unexpectedDv.x, unexpectedDv.y, unexpectedDv.z));
+      const worldDir: Vec3 = {
+        x: unexpectedDv.x * invDv,
+        y: unexpectedDv.y * invDv,
+        z: unexpectedDv.z * invDv,
+      };
+      // Car-local direction: +X left (-rightWorld), +Y up, +Z forward
+      const localDirection: Vec3 = {
+        x: -dot(worldDir, state.rightWorld),
+        y: dot(worldDir, state.upWorld),
+        z: dot(worldDir, state.forwardWorld),
+      };
+      const classified = classifyImpactDamageZone(localDirection);
+      const damageAdd = intensity01 * 0.28;
+      state.damageZones[classified.zoneIndex] = clamp(
+        state.damageZones[classified.zoneIndex] + damageAdd,
+        0,
+        1
+      );
+      if (classified.secondaryIndex !== undefined && intensity01 > 0.35) {
+        state.damageZones[classified.secondaryIndex] = clamp(
+          state.damageZones[classified.secondaryIndex] + damageAdd * 0.45,
+          0,
+          1
+        );
+      }
+      this.impactSeq++;
+      this.impactCooldownS = 0.16;
+      const pulse: IVehicleImpactPulse = {
+        seq: this.impactSeq,
+        tick: state.simTick,
+        intensity01,
+        impulseNs: Math.round(horizImpactDv * Math.max(550, this.appliedMassKg)),
+        localDirection,
+        zone: classified.zone,
+      };
+      state.lastImpact = pulse;
+      this.ctx?.events.emit('vehicle:impact', pulse);
     }
 
     const invDt = dt > 1e-6 ? 1 / dt : 120;

@@ -2,6 +2,7 @@ import {
   normalizeTrackVersion,
   type ITrackSectorMeta,
   type ITrackZoneMeta,
+  type SurfaceType,
 } from '../../contracts/simulation';
 import {
   isProgressInSpan,
@@ -10,6 +11,24 @@ import {
   TrackSpline,
 } from '../../core/math/spline';
 import type { ITrackSplineSchema } from '../../core/types';
+
+export interface ITrackHazardMarkerMeta {
+  kind: 'blind_crest' | 'downhill_braking';
+  t: number;
+  distanceM: number;
+  gradeBeforePct: number;
+  gradeAfterPct: number;
+  curvature: number;
+  /** Outside of the upcoming turn (-1 = left, +1 = right) for marker board placement. */
+  outsideSide: -1 | 1;
+}
+
+export interface ITrackSurfaceTransitionMeta {
+  t: number;
+  distanceM: number;
+  fromSurface: SurfaceType;
+  toSurface: SurfaceType;
+}
 
 export interface ITrackPreviewPoint2D {
   /** Normalized X in [0..1] preserving aspect ratio */
@@ -46,8 +65,104 @@ export interface ITrackPreviewData {
   zones: ITrackZoneMeta[];
   outline: ITrackPreviewPoint2D[];
   elevationProfile: ITrackElevationPoint[];
+  hazards: ITrackHazardMarkerMeta[];
+  surfaceTransitions: ITrackSurfaceTransitionMeta[];
   startPoint: ITrackPreviewPoint2D;
   startHeading2D: { x: number; y: number };
+}
+
+/**
+ * Pure-math detector for blind crests (uphill -> downhill pitch inflection) and
+ * steep downhill braking zones (steep descent entering a tight turn).
+ * Used to drive both preview metadata and roadside brake/crest boards in `buildTrackMesh`.
+ */
+export function extractCrestAndDownhillBrakingZones(
+  spline: TrackSpline
+): ITrackHazardMarkerMeta[] {
+  const results: ITrackHazardMarkerMeta[] = [];
+  const samples = spline.samples;
+  const n = samples.length;
+  const len = spline.totalLengthM;
+  if (len < 120) return results;
+
+  const gradeBetween = (dA: number, dB: number): number => {
+    const a = spline.sampleAtProgress(spline.progressAtDistance(dA));
+    const b = spline.sampleAtProgress(spline.progressAtDistance(dB));
+    const horiz = Math.hypot(b.position.x - a.position.x, b.position.z - a.position.z);
+    if (horiz < 1e-3) return 0;
+    return ((b.position.y - a.position.y) / horiz) * 100;
+  };
+
+  let lastCrestDist = -300;
+  let lastDownhillDist = -220;
+
+  for (let i = 0; i < n; i++) {
+    const s = samples[i];
+    const gBefore = gradeBetween(s.distanceM - 55, s.distanceM - 8);
+    const gAfter = gradeBetween(s.distanceM + 8, s.distanceM + 55);
+
+    // 1. Blind crest: climbing >= +3.0% transitioning to descending <= -2.0% (>= 5.5% pitch inflection)
+    if (
+      gBefore >= 3.0 &&
+      gAfter <= -2.0 &&
+      gBefore - gAfter >= 5.5 &&
+      s.distanceM - lastCrestDist >= 200
+    ) {
+      lastCrestDist = s.distanceM;
+      const ahead = spline.sampleAtProgress(spline.progressAtDistance(s.distanceM + 45));
+      results.push({
+        kind: 'blind_crest',
+        t: s.t,
+        distanceM: s.distanceM,
+        gradeBeforePct: Number(gBefore.toFixed(1)),
+        gradeAfterPct: Number(gAfter.toFixed(1)),
+        curvature: Number(Math.max(s.curvature, ahead.curvature).toFixed(4)),
+        outsideSide: ahead.signedCurvature >= 0 ? -1 : 1,
+      });
+    }
+
+    // 2. Steep downhill braking zone: descending <= -5.0% entering a tight bend (curvature >= 0.017)
+    if (
+      gBefore <= -5.0 &&
+      s.curvature >= 0.017 &&
+      s.distanceM - lastDownhillDist >= 180
+    ) {
+      lastDownhillDist = s.distanceM;
+      results.push({
+        kind: 'downhill_braking',
+        t: s.t,
+        distanceM: s.distanceM,
+        gradeBeforePct: Number(gBefore.toFixed(1)),
+        gradeAfterPct: Number(gAfter.toFixed(1)),
+        curvature: Number(s.curvature.toFixed(4)),
+        outsideSide: s.signedCurvature >= 0 ? -1 : 1,
+      });
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Extracts exact surface transitions (e.g. tarmac <-> gravel on Copper Creek Cross).
+ */
+export function extractSurfaceTransitions(spline: TrackSpline): ITrackSurfaceTransitionMeta[] {
+  const transitions: ITrackSurfaceTransitionMeta[] = [];
+  const samples = spline.samples;
+  const n = samples.length;
+  for (let i = 0; i < n; i++) {
+    const a = samples[i];
+    const b = samples[(i + 1) % n];
+    if (a.surface !== b.surface) {
+      transitions.push({
+        t: b.t,
+        distanceM: b.distanceM,
+        fromSurface: a.surface,
+        toSurface: b.surface,
+      });
+    }
+  }
+  return transitions;
 }
 
 /**
@@ -137,6 +252,8 @@ export function buildTrackPreviewData(
     zones: spline.zones,
     outline,
     elevationProfile,
+    hazards: extractCrestAndDownhillBrakingZones(spline),
+    surfaceTransitions: extractSurfaceTransitions(spline),
     startPoint: outline[0],
     startHeading2D: {
       x: s0.tangent.x / headingLen,

@@ -2,15 +2,13 @@ import type {
   CameraPreset,
   IEngineContext,
   IInputState,
+  IKeyBindings,
   IModulusPlugin,
   IVehicleRuntimeState,
 } from '../../core/types';
+import { DeterministicInputShaper } from './inputShaper';
 
-const CAMERA_CYCLE: CameraPreset[] = ['chase', 'hood', 'orbit'];
-
-function clamp(v: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, v));
-}
+const CAMERA_CYCLE: CameraPreset[] = ['cockpit', 'hood', 'chase', 'orbit'];
 
 function isEditableElement(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
@@ -19,18 +17,28 @@ function isEditableElement(target: EventTarget | null): boolean {
   return target.isContentEditable;
 }
 
+function anyHeld(held: Set<string>, codes: string[]): boolean {
+  for (let i = 0; i < codes.length; i++) {
+    if (held.has(codes[i])) return true;
+  }
+  return false;
+}
+
+function matchesCode(code: string, codes: string[]): boolean {
+  return codes.includes(code);
+}
+
 /**
- * Speed-sensitive WASD + Arrow keys keyboard input controller with progressive steering,
- * high-speed authority taper above 80 km/h, and subtle counter-steer alignment assist.
+ * Keyboard input controller (`priority: 30`) with dynamic keybinding lookup from Engine,
+ * deterministic fixed-step shaping (zero 1-tick input lag), and rising-edge brake detection
+ * for standstill reverse-on-fresh-press.
  */
 class InputKeyboardController {
   private ctx: IEngineContext | null = null;
   private heldKeys = new Set<string>();
-
-  private currentThrottle = 0;
-  private currentBrake = 0;
-  private currentSteer = 0;
-  private currentHandbrake = 0;
+  private shaper = new DeterministicInputShaper();
+  private prevBrakeHeld = false;
+  private unsubReset: (() => void) | null = null;
 
   private boundKeyDown: (e: KeyboardEvent) => void;
   private boundKeyUp: (e: KeyboardEvent) => void;
@@ -44,6 +52,10 @@ class InputKeyboardController {
 
   public init(ctx: IEngineContext): void {
     this.ctx = ctx;
+    this.unsubReset = ctx.events.on('vehicle:reset', () => {
+      this.shaper.reset();
+      this.prevBrakeHeld = false;
+    });
     if (typeof window !== 'undefined') {
       window.addEventListener('keydown', this.boundKeyDown);
       window.addEventListener('keyup', this.boundKeyUp);
@@ -52,21 +64,23 @@ class InputKeyboardController {
   }
 
   public dispose(): void {
+    this.unsubReset?.();
+    this.unsubReset = null;
     if (typeof window !== 'undefined') {
       window.removeEventListener('keydown', this.boundKeyDown);
       window.removeEventListener('keyup', this.boundKeyUp);
       window.removeEventListener('blur', this.boundBlur);
     }
     this.heldKeys.clear();
+    this.shaper.reset();
+    this.prevBrakeHeld = false;
     this.ctx = null;
   }
 
   private onBlur(): void {
     this.heldKeys.clear();
-    this.currentThrottle = 0;
-    this.currentBrake = 0;
-    this.currentSteer = 0;
-    this.currentHandbrake = 0;
+    this.shaper.reset();
+    this.prevBrakeHeld = false;
     this.ctx?.setHardwareInput('keyboard', {
       throttle: 0,
       brake: 0,
@@ -76,6 +90,8 @@ class InputKeyboardController {
       gearUp: false,
       gearDown: false,
       resetVehicle: false,
+      brakeFreshPress: false,
+      reverseRequest: false,
     });
   }
 
@@ -86,6 +102,7 @@ class InputKeyboardController {
     }
 
     const code = e.code;
+    const bindings: IKeyBindings = this.ctx.getKeyBindings();
 
     // Prevent browser scroll on driving keys while in track mode
     if (
@@ -104,13 +121,16 @@ class InputKeyboardController {
     if (e.repeat) return;
     if (this.ctx.getVisualMode() !== 'track') return;
 
-    if (code === 'KeyE' || code === 'ShiftLeft') {
+    if (matchesCode(code, bindings.brake)) {
+      this.ctx.setHardwareInput('keyboard', { brakeFreshPress: true });
+    }
+    if (matchesCode(code, bindings.gearUp)) {
       this.ctx.setHardwareInput('keyboard', { gearUp: true });
-    } else if (code === 'KeyQ' || code === 'ControlLeft') {
+    } else if (matchesCode(code, bindings.gearDown)) {
       this.ctx.setHardwareInput('keyboard', { gearDown: true });
-    } else if (code === 'KeyR') {
+    } else if (matchesCode(code, bindings.reset)) {
       this.ctx.setHardwareInput('keyboard', { resetVehicle: true });
-    } else if (code === 'KeyC') {
+    } else if (matchesCode(code, bindings.camera)) {
       const current = this.ctx.getCameraPreset();
       const idx = CAMERA_CYCLE.indexOf(current);
       const next = CAMERA_CYCLE[(idx + 1) % CAMERA_CYCLE.length];
@@ -122,100 +142,73 @@ class InputKeyboardController {
     this.heldKeys.delete(e.code);
   }
 
-  public step(dt: number, state: IVehicleRuntimeState, _input: IInputState): void {
+  public step(dt: number, state: IVehicleRuntimeState, input: IInputState): void {
     if (!this.ctx) return;
     if (this.ctx.getVisualMode() !== 'track') {
-      this.currentThrottle = 0;
-      this.currentBrake = 0;
-      this.currentSteer = 0;
-      this.currentHandbrake = 0;
+      this.shaper.reset();
+      this.prevBrakeHeld = false;
       return;
     }
 
-    const throttleTarget =
-      this.heldKeys.has('KeyW') || this.heldKeys.has('ArrowUp') ? 1 : 0;
-    const brakeTarget =
-      this.heldKeys.has('KeyS') || this.heldKeys.has('ArrowDown') ? 1 : 0;
-    const handbrakeTarget = this.heldKeys.has('Space') ? 1 : 0;
-
-    const steerLeft = this.heldKeys.has('KeyA') || this.heldKeys.has('ArrowLeft') ? 1 : 0;
-    const steerRight = this.heldKeys.has('KeyD') || this.heldKeys.has('ArrowRight') ? 1 : 0;
-    const rawSteerDir = steerLeft - steerRight; // +1 = Left, -1 = Right
-
-    // Smooth pedal ramping so keyboard inputs don't shock tire slip
-    const pedalRate = (target: number, current: number) => (target > current ? 9.5 : 15.0);
-    this.currentThrottle = moveTowards(
-      this.currentThrottle,
-      throttleTarget,
-      pedalRate(throttleTarget, this.currentThrottle) * dt
-    );
-    this.currentBrake = moveTowards(
-      this.currentBrake,
-      brakeTarget,
-      pedalRate(brakeTarget, this.currentBrake) * dt
-    );
-    this.currentHandbrake = moveTowards(
-      this.currentHandbrake,
-      handbrakeTarget,
-      14.0 * dt
-    );
-
-    // Speed-dependent steering authority taper above 80 km/h
-    const speedKph = Math.max(0, state.speedKph);
-    const speedTaper =
-      speedKph <= 80
-        ? 1.0
-        : clamp(1.0 - ((speedKph - 80) / 220) * 0.62, 0.34, 1.0);
-
-    const targetSteer = rawSteerDir * speedTaper;
-
-    // Progressive steering rate: faster recentering than turn-in
-    const isReturning = rawSteerDir === 0 || Math.sign(targetSteer) !== Math.sign(this.currentSteer);
-    const steerRate = isReturning
-      ? 7.8
-      : clamp(4.6 - (speedKph / 260) * 1.6, 2.6, 4.6);
-
-    this.currentSteer = moveTowards(this.currentSteer, targetSteer, steerRate * dt);
-
-    // Subtle counter-steer alignment assist from body lateral velocity / rear slip
-    let counterSteer = 0;
-    const fwd = state.forwardWorld;
-    const right = state.rightWorld;
-    const vel = state.linearVelocityWorld;
-    const vForward = vel.x * fwd.x + vel.y * fwd.y + vel.z * fwd.z;
-    const vRight = vel.x * right.x + vel.y * right.y + vel.z * right.z;
-
-    if (vForward > 7.5) {
-      const bodySlipRad = Math.atan2(vRight, vForward);
-      // Sliding right (+vRight) means nose points left -> counter-steer right (-steer)
-      const speedBlend = clamp((vForward - 7.5) / 14.0, 0, 1);
-      const handbrakeScale = 1.0 - this.currentHandbrake * 0.65;
-      counterSteer = clamp(-bodySlipRad * 0.42, -0.34, 0.34) * speedBlend * handbrakeScale;
+    // Do not overwrite active AI or Touch input
+    if (state.aiEnabled || input.inputSource === 'touch') {
+      return;
     }
 
-    const finalSteer = clamp(this.currentSteer + counterSteer, -1, 1);
+    const bindings = this.ctx.getKeyBindings();
+    const throttleRaw = anyHeld(this.heldKeys, bindings.throttle) ? 1 : 0;
+    const brakeHeld = anyHeld(this.heldKeys, bindings.brake);
+    const brakeRaw = brakeHeld ? 1 : 0;
+    const handbrakeRaw = anyHeld(this.heldKeys, bindings.handbrake) ? 1 : 0;
+
+    const steerLeft = anyHeld(this.heldKeys, bindings.steerLeft) ? 1 : 0;
+    const steerRight = anyHeld(this.heldKeys, bindings.steerRight) ? 1 : 0;
+    const rawSteer = steerLeft - steerRight; // +1 = Left, -1 = Right
+
+    const freshBrakePress = (brakeHeld && !this.prevBrakeHeld) || Boolean(input.brakeFreshPress);
+    this.prevBrakeHeld = brakeHeld;
+
+    const shaped = this.shaper.step(
+      dt,
+      {
+        throttle: throttleRaw,
+        brake: brakeRaw,
+        steer: rawSteer,
+        handbrake: handbrakeRaw,
+      },
+      state,
+      state.assistPreset
+    );
+
+    // Record raw & shaped steering telemetry
+    state.rawSteerInput = rawSteer;
+    state.commandedSteer = shaped.steer;
+
+    // Write directly into `input` for ZERO 1-tick lag AND mirror to Engine keyboard buffer
+    input.throttle = shaped.throttle;
+    input.brake = shaped.brake;
+    input.steer = shaped.steer;
+    input.handbrake = shaped.handbrake;
+    input.clutch = 0;
+    input.brakeFreshPress = freshBrakePress;
+    input.inputSource = 'keyboard';
 
     this.ctx.setHardwareInput('keyboard', {
-      throttle: this.currentThrottle,
-      brake: this.currentBrake,
-      steer: finalSteer,
-      handbrake: this.currentHandbrake,
+      throttle: shaped.throttle,
+      brake: shaped.brake,
+      steer: shaped.steer,
+      handbrake: shaped.handbrake,
       clutch: 0,
       inputSource: 'keyboard',
     });
   }
 }
 
-function moveTowards(current: number, target: number, maxDelta: number): number {
-  if (Math.abs(target - current) <= maxDelta) return target;
-  return current + Math.sign(target - current) * maxDelta;
-}
-
 const controller = new InputKeyboardController();
 
 export const inputKeyboardPlugin: IModulusPlugin = {
   id: 'input-keyboard',
-  version: '1.0.0',
+  version: '2.0.0',
   priority: 30,
   init(ctx) {
     controller.init(ctx);

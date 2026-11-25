@@ -16,14 +16,15 @@ import {
 } from '../../core/types';
 
 const DEG_TO_RAD = Math.PI / 180;
-const MAX_STEER_ANGLE_RAD = 31 * DEG_TO_RAD;
-const WHEEL_SPIN_SUBSTEPS = 4;
+const MAX_STEER_ANGLE_RAD = 30 * DEG_TO_RAD;
+const WHEEL_SPIN_SUBSTEPS = 8;
 
 const SURFACE_GRIP: Record<SurfaceType, number> = {
   tarmac: 1.0,
   kerb: 0.88,
   grass: 0.52,
-  gravel: 0.62,
+  gravel: 0.64,
+  dirt: 0.60,
 };
 
 const SURFACE_ROLLING_RESISTANCE: Record<SurfaceType, number> = {
@@ -31,6 +32,7 @@ const SURFACE_ROLLING_RESISTANCE: Record<SurfaceType, number> = {
   kerb: 0.022,
   grass: 0.068,
   gravel: 0.082,
+  dirt: 0.088,
 };
 
 function clamp(v: number, min: number, max: number): number {
@@ -70,7 +72,7 @@ function localToWorld(state: IVehicleRuntimeState, local: Vec3): Vec3 {
 
 export class VehicleSolverPlugin implements IModulusPlugin {
   public readonly id = 'vehicle-solver';
-  public readonly version = '1.0.0';
+  public readonly version = '2.0.0';
   public readonly priority = 60;
 
   private ctx: IEngineContext | null = null;
@@ -119,9 +121,18 @@ export class VehicleSolverPlugin implements IModulusPlugin {
       Math.max(80, currentMassKg * rearWeightFrac * 0.5 - vehicle.unsprungMassPerCornerKg[3]),
     ];
 
-    // 1. Ackermann Front Steering + Static Toe Alignment
+    // 1. Ackermann Front Steering + Static Toe Alignment + Asymmetric Front Damage Pull
+    const dmgFL = clamp(state.damageZones[0] ?? 0, 0, 1);
+    const dmgFR = clamp(state.damageZones[1] ?? 0, 0, 1);
+    const steerPullRad = (dmgFL - dmgFR) * 2.8 * DEG_TO_RAD;
+
     const steerInput = clamp(input.steer, -1, 1);
-    const centerSteerRad = steerInput * MAX_STEER_ANGLE_RAD;
+    state.commandedSteer = steerInput;
+    const centerSteerRad = clamp(
+      steerInput * MAX_STEER_ANGLE_RAD + steerPullRad,
+      -MAX_STEER_ANGLE_RAD,
+      MAX_STEER_ANGLE_RAD
+    );
     let ackFL = 0;
     let ackFR = 0;
 
@@ -133,11 +144,9 @@ export class VehicleSolverPlugin implements IModulusPlugin {
       const outerAngle = Math.atan(vehicle.wheelbaseM / (turnRadius + halfTrack));
 
       if (centerSteerRad > 0) {
-        // Left turn: FL is inner (+), FR is outer (+)
         ackFL = innerAngle;
         ackFR = outerAngle;
       } else {
-        // Right turn: FR is inner (-), FL is outer (-)
         ackFL = -outerAngle;
         ackFR = -innerAngle;
       }
@@ -145,11 +154,11 @@ export class VehicleSolverPlugin implements IModulusPlugin {
 
     const toeFrontRad = sus.toeFrontDeg * DEG_TO_RAD;
     const toeRearRad = sus.toeRearDeg * DEG_TO_RAD;
-    // Toe-in (+): left wheel points slightly right (-), right wheel points slightly left (+)
     state.wheels[0].steerAngleRad = ackFL - toeFrontRad;
     state.wheels[1].steerAngleRad = ackFR + toeFrontRad;
     state.wheels[2].steerAngleRad = -toeRearRad;
     state.wheels[3].steerAngleRad = toeRearRad;
+    state.frontWheelAngleRad = 0.5 * (state.wheels[0].steerAngleRad + state.wheels[1].steerAngleRad);
 
     // 2. Suspension Deflections, Coilover Springs, Asymmetric Dampers & Anti-Roll Bars
     const springRatesNm: [number, number, number, number] = [
@@ -162,11 +171,9 @@ export class VehicleSolverPlugin implements IModulusPlugin {
     const deflectionsM: [number, number, number, number] = [0, 0, 0, 0];
     for (let i = 0; i < 4; i++) {
       const w = state.wheels[i];
-      // L_static = vehicle.suspensionRestLengthM[i] = 0.22 + rideHeightMm / 1000
       deflectionsM[i] = w.grounded ? vehicle.suspensionRestLengthM[i] - w.suspensionLengthM : -0.06;
     }
 
-    // Torsional rigidity modulates ARB load-transfer precision
     const rigidityFactor = clamp(vehicle.torsionalRigidityNmDeg / 26000, 0.82, 1.18);
     const arbFrontForce = (deflectionsM[0] - deflectionsM[1]) * sus.arbFrontNmm * 1000 * rigidityFactor;
     const arbRearForce = (deflectionsM[2] - deflectionsM[3]) * sus.arbRearNmm * 1000 * rigidityFactor;
@@ -177,7 +184,6 @@ export class VehicleSolverPlugin implements IModulusPlugin {
       -arbRearForce,
     ];
 
-    // Roll-center height by suspension geometry (splits elastic vs geometric load transfer and prevents high-grip flip)
     const rollCenterHeightM =
       sus.layout === 'Pushrod Inboard'
         ? Math.min(0.22, vehicle.cgHeightM * 0.44)
@@ -185,16 +191,13 @@ export class VehicleSolverPlugin implements IModulusPlugin {
           ? Math.min(0.18, vehicle.cgHeightM * 0.38)
           : Math.min(0.14, vehicle.cgHeightM * 0.32);
 
-    // Geometric load transfer component for Pacejka normal load fidelity
     const geomLatTransferN =
       ((currentMassKg * state.lateralG * 9.81 * rollCenterHeightM) / Math.max(1.2, vehicle.trackWidthM)) * 0.5;
     const geomLongTransferN =
       ((currentMassKg * state.longitudinalG * 9.81 * rollCenterHeightM) / Math.max(1.8, vehicle.wheelbaseM)) * 0.5;
 
-    // World center of mass (matches Rapier body localCom)
     const worldCom = localToWorld(state, vehicle.cgPositionLocal);
 
-    // Suspension geometry camber recovery gain (rad per meter of bump compression)
     const camberGainRadPerM =
       sus.layout === 'Pushrod Inboard'
         ? -26 * DEG_TO_RAD
@@ -203,22 +206,29 @@ export class VehicleSolverPlugin implements IModulusPlugin {
           : -7 * DEG_TO_RAD;
     const casterRad = sus.casterFrontDeg * DEG_TO_RAD;
 
-    // Tire pressure rolling resistance adjustment (lower PSI = slightly higher rolling drag)
     const pressureRrFactor = clamp(1 + (28.5 - build.wheelsAndTires.coldPressurePsi) * 0.015, 0.82, 1.22);
 
-    // Braking inputs
-    const brakeInput = clamp(input.brake, 0, 1);
+    // Braking pedal mapping:
+    // While in Reverse (`gear === -1 && reverseState === 'reverse'`), W (`input.throttle`) applies service brake
+    // and S (`input.brake`) drives reverse throttle in powertrain!
+    const isReversing = state.gear === -1 && state.reverseState === 'reverse';
+    const serviceBrakeInput = isReversing ? clamp(input.throttle, 0, 1) : clamp(input.brake, 0, 1);
+    const activeDriveIntent = isReversing ? clamp(input.brake, 0, 1) : clamp(input.throttle, 0, 1);
     const handbrakeInput = clamp(input.handbrake, 0, 1);
 
-    // Static hold gate for 100% jitter-free stationary rest on slopes & grid
-    const lowSpeedBlend = clamp((1.6 - state.speedMs) / 1.4, 0, 1);
+    // Static hold gate for jitter-free stationary rest on slopes & grid
+    const lowSpeedBlend = clamp((1.2 - state.speedMs) / 1.0, 0, 1);
     const isParkedHold =
       state.speedMs < 0.25 &&
-      input.throttle < 0.02 &&
-      (brakeInput > 0.02 || handbrakeInput > 0.02 || state.speedMs < 0.1);
+      activeDriveIntent < 0.02 &&
+      (serviceBrakeInput > 0.02 || handbrakeInput > 0.02 || state.speedMs < 0.1);
 
     const maxSuspForcePerCorner = totalWeightN * 3.0;
     const bumpLimitM = 0.075;
+
+    // ABS threshold by assist preset (Beginner: active threshold ABS; Sport: late threshold ABS; Pro: off)
+    const absEnabled = !state.aiEnabled && state.assistPreset !== 'pro';
+    const absSlipThreshold = state.assistPreset === 'beginner' ? -0.14 : -0.22;
 
     for (let i = 0; i < 4; i++) {
       const w = state.wheels[i];
@@ -232,28 +242,44 @@ export class VehicleSolverPlugin implements IModulusPlugin {
       const bumpCamberRad = deflectionsM[i] * camberGainRadPerM;
       let casterCamberRad = 0;
       if (isFront) {
-        // Left turn (steer > 0): outer FR gains negative camber, inner FL gains positive camber
         casterCamberRad = (isLeft ? 1 : -1) * Math.sin(w.steerAngleRad) * casterRad * 0.85;
       }
       w.camberAngleRad = clamp(staticCamberRad + bumpCamberRad + casterCamberRad, -10 * DEG_TO_RAD, 5 * DEG_TO_RAD);
 
-      // Service brake + rear handbrake torque
+      // Service brake + rear handbrake torque (with ABS modulation if active)
       const baseAxleBrake = isFront
         ? vehicle.maxBrakeTorquePerAxleFrontNm * 0.5
         : vehicle.maxBrakeTorquePerAxleRearNm * 0.5;
-      let brakeTorqueNm = baseAxleBrake * brakeInput * w.brakeFadeMultiplier;
+      let serviceBrakeTorqueNm = baseAxleBrake * serviceBrakeInput * w.brakeFadeMultiplier;
+
+      let absModulating = false;
+      if (
+        absEnabled &&
+        w.grounded &&
+        serviceBrakeInput > 0.2 &&
+        state.speedMs > 2.2 &&
+        w.slipRatio < absSlipThreshold
+      ) {
+        // Progressive threshold ABS: eases brake pressure cleanly to hold ~12-16% optimal braking slip
+        const overshoot = clamp((absSlipThreshold - w.slipRatio) / 0.25, 0, 1);
+        serviceBrakeTorqueNm *= clamp(1 - overshoot * 0.72, 0.22, 1.0);
+        absModulating = true;
+      }
+
+      let brakeTorqueNm = serviceBrakeTorqueNm;
       if (!isFront && handbrakeInput > 0.01) {
-        brakeTorqueNm += 3600 * handbrakeInput * w.brakeFadeMultiplier;
+        brakeTorqueNm += 3400 * handbrakeInput * w.brakeFadeMultiplier;
       }
       w.brakeTorqueNm = brakeTorqueNm;
 
       if (!w.grounded) {
-        // Airborne wheel: zero normal/tire forces, integrate free wheel spin
         w.normalLoadN = 0;
         w.slipRatio = 0;
         w.slipAngleRad = 0;
         w.longitudinalForceN = 0;
         w.lateralForceN = 0;
+        w.lockupIntensity = 0;
+        w.scrubIntensity = 0;
 
         let omega = w.angularVelocityRadS;
         const subDt = dt / WHEEL_SPIN_SUBSTEPS;
@@ -266,7 +292,6 @@ export class VehicleSolverPlugin implements IModulusPlugin {
           } else {
             omega -= Math.sign(omega) * brakeDecel;
           }
-          // Subtle bearing drag
           omega *= 1 - 0.12 * subDt;
         }
         w.angularVelocityRadS = clamp(omega, -260, 260);
@@ -276,13 +301,12 @@ export class VehicleSolverPlugin implements IModulusPlugin {
 
       // --- GROUNDED CORNER ---
 
-      // 2a. Vertical Suspension Force (Spring + Asymmetric Damper + Bump-Stop + ARB)
+      // 2a. Vertical Suspension Force
       const k = springRatesNm[i];
       const staticSagM = staticCornerLoads[i] / k;
       const springCompM = staticSagM + deflectionsM[i];
-      let fSpring = springCompM > 0 ? k * springCompM : 0;
+      const fSpring = springCompM > 0 ? k * springCompM : 0;
 
-      // Critical damping scaled by bump/rebound click settings (1..20)
       const cCrit = 2 * Math.sqrt(k * cornerSprungMass[i]);
       const bumpClicks = isFront ? sus.damperBumpFront : sus.damperBumpRear;
       const reboundClicks = isFront ? sus.damperReboundFront : sus.damperReboundRear;
@@ -293,7 +317,6 @@ export class VehicleSolverPlugin implements IModulusPlugin {
       const cDamper = cCrit * zeta;
       const fDamper = clamp(cDamper * w.compressionVelocityMs, -totalWeightN * 1.4, totalWeightN * 1.8);
 
-      // Progressive bump stop when bottoming out
       let fBumpStop = 0;
       if (w.bottomedOut || deflectionsM[i] > bumpLimitM) {
         const over = Math.max(0, deflectionsM[i] - bumpLimitM);
@@ -303,7 +326,6 @@ export class VehicleSolverPlugin implements IModulusPlugin {
       const fArb = arbForces[i];
       const suspForceN = clamp(fSpring + fDamper + fBumpStop + fArb, 0, maxSuspForcePerCorner);
 
-      // Apply suspension force along road contact normal at the corner hardpoint (CG Y height)
       const localAnchor = vehicle.wheelPositionsLocal[i];
       const suspPointWorld = localToWorld(state, {
         x: localAnchor.x,
@@ -320,9 +342,8 @@ export class VehicleSolverPlugin implements IModulusPlugin {
         pointWorld: suspPointWorld,
       });
 
-      // Normal load on contact patch includes elastic suspension force + geometric roll-center load transfer
       const latSign = isLeft ? 1 : -1;
-      const longSign = isFront ? -1 : 1; // Braking (longG < 0) adds load to front (-1 * neg = +)
+      const longSign = isFront ? -1 : 1;
       const normalLoadN = clamp(
         suspForceN + latSign * geomLatTransferN + longSign * geomLongTransferN,
         0,
@@ -335,6 +356,8 @@ export class VehicleSolverPlugin implements IModulusPlugin {
         w.slipAngleRad = 0;
         w.longitudinalForceN = 0;
         w.lateralForceN = 0;
+        w.lockupIntensity = 0;
+        w.scrubIntensity = 0;
         w.rotationAngleRad += w.angularVelocityRadS * dt;
         continue;
       }
@@ -344,23 +367,19 @@ export class VehicleSolverPlugin implements IModulusPlugin {
       const cosS = Math.cos(w.steerAngleRad);
       const sinS = Math.sin(w.steerAngleRad);
 
-      // Wheel forward in chassis space: fwd * cos(steer) - right * sin(steer) (+steer = left)
       const rawFwd: Vec3 = {
         x: state.forwardWorld.x * cosS - state.rightWorld.x * sinS,
         y: state.forwardWorld.y * cosS - state.rightWorld.y * sinS,
         z: state.forwardWorld.z * cosS - state.rightWorld.z * sinS,
       };
-      // Project onto contact plane perpendicular to road normal
       const fwdDotN = dot(rawFwd, n);
       const wFwd = normalize({
         x: rawFwd.x - n.x * fwdDotN,
         y: rawFwd.y - n.y * fwdDotN,
         z: rawFwd.z - n.z * fwdDotN,
       });
-      // Wheel right vector on contact plane: wFwd x n
       const wRight = normalize(cross(wFwd, n));
 
-      // Contact patch velocity = v_COM + omega x (contactPoint - COM)
       const rPatch: Vec3 = {
         x: w.contactPointWorld.x - worldCom.x,
         y: w.contactPointWorld.y - worldCom.y,
@@ -376,14 +395,15 @@ export class VehicleSolverPlugin implements IModulusPlugin {
       const vLong = dot(patchVel, wFwd);
       const vLat = dot(patchVel, wRight);
 
-      // 4. Effective Peak Friction (Pacejka + Load Sensitivity + Thermal/Wear + Surface + Camber + Admin Bias)
+      // 4. Effective Peak Friction (Pacejka + Load Sensitivity + Thermal/Wear + Surface + Corner Damage + Bias)
       const baseMu = isFront ? vehicle.peakTireMuFront : vehicle.peakTireMuRear;
       const loadSensitiveMu = computeLoadSensitiveMu(baseMu, normalLoadN, 3600);
       const surfaceGrip = SURFACE_GRIP[w.surface] ?? 1.0;
-      const effectiveMu = loadSensitiveMu * gripBias * w.thermalGripMultiplier * surfaceGrip;
+      const cornerDamageMult = 1 - clamp(state.damageZones[i] ?? 0, 0, 1) * 0.25;
+      const effectiveMu =
+        loadSensitiveMu * gripBias * w.thermalGripMultiplier * surfaceGrip * cornerDamageMult;
       const maxTireForceN = effectiveMu * normalLoadN;
 
-      // Camber trade-off: modest negative camber boosts cornering grip, excessive negative camber trims straight traction
       const absCamberDeg = Math.abs(w.camberAngleRad / DEG_TO_RAD);
       const latCamberMult =
         w.camberAngleRad <= 0
@@ -391,14 +411,13 @@ export class VehicleSolverPlugin implements IModulusPlugin {
           : 1.0 - absCamberDeg * 0.035;
       const longCamberMult = Math.max(0.88, 1.0 - Math.max(0, absCamberDeg - 1.5) * 0.018);
 
-      // 5. Substepped Wheel Spin + Longitudinal Pacejka + Combined Slip Circle
+      // 5. Substepped Wheel Spin + Progressive Pacejka + Combined Slip Circle
       const subDt = dt / WHEEL_SPIN_SUBSTEPS;
       const crr = (SURFACE_ROLLING_RESISTANCE[w.surface] ?? 0.014) * pressureRrFactor;
       const rollingResistTorque = crr * normalLoadN * wheelRadiusM;
 
-      // Slip angle (smoothly attenuated near 0 m/s for clean low-speed stability)
-      const speedScaleLat = clamp(Math.hypot(vLong, vLat) / 0.85, 0, 1);
-      const slipAngleRad = Math.atan2(vLat, Math.max(Math.abs(vLong), 1.35)) * speedScaleLat;
+      const speedScaleLat = clamp(Math.hypot(vLong, vLat) / 0.8, 0, 1);
+      const slipAngleRad = Math.atan2(vLat, Math.max(Math.abs(vLong), 1.15)) * speedScaleLat;
 
       let fyPure = -evaluatePacejka(slipAngleRad, {
         B: vehicle.pacejkaB,
@@ -407,9 +426,8 @@ export class VehicleSolverPlugin implements IModulusPlugin {
         E: vehicle.pacejkaE,
       });
 
-      // Blend in smooth low-speed lateral viscous friction to kill jitter/drift on slopes at 0 km/h
       if (lowSpeedBlend > 0) {
-        const latViscous = clamp(-vLat * normalLoadN * 0.75, -maxTireForceN, maxTireForceN);
+        const latViscous = clamp(-vLat * normalLoadN * 0.85, -maxTireForceN, maxTireForceN);
         fyPure = fyPure * (1 - lowSpeedBlend) + latViscous * lowSpeedBlend;
       }
 
@@ -417,32 +435,31 @@ export class VehicleSolverPlugin implements IModulusPlugin {
       let accumFx = 0;
       let lastKappa = 0;
 
-      // Longitudinal slip speed denominator prevents low-speed kappa blowup
-      const vLongDenom = Math.max(Math.abs(vLong), 1.8);
+      // Proper low-speed longitudinal slip denominator gives crisp standing launch without kappa blowup
+      const vLongDenom = Math.max(Math.abs(vLong), 0.75);
+      const longC = Math.min(1.34, vehicle.pacejkaC * 1.01);
+      const longE = Math.min(-0.25, vehicle.pacejkaE);
 
       for (let s = 0; s < WHEEL_SPIN_SUBSTEPS; s++) {
         const wheelLinearSpeed = omega * wheelRadiusM;
         const rawKappa = (wheelLinearSpeed - vLong) / vLongDenom;
-        const kappa = clamp(rawKappa, -1.6, 1.6);
+        const kappa = clamp(rawKappa, -1.5, 1.5);
         lastKappa = kappa;
 
         const fxPure = evaluatePacejka(kappa, {
-          B: vehicle.pacejkaB * 1.08,
-          C: vehicle.pacejkaC * 1.06,
+          B: vehicle.pacejkaB * 1.06,
+          C: longC,
           D: maxTireForceN * longCamberMult,
-          E: vehicle.pacejkaE,
+          E: longE,
         });
 
-        // Combined friction ellipse
         const combined = combineFrictionCircle(fxPure, fyPure, maxTireForceN);
         const fxStep = combined.fx;
         accumFx += fxStep;
 
-        // Wheel rotational equation: I * dOmega/dt = T_drive - Fx * R - T_roll - T_brake
         const netActiveTorque = w.driveTorqueNm - fxStep * wheelRadiusM;
         let nextOmega = omega + (netActiveTorque / wheelInertia) * subDt;
 
-        // Passive opposing torques (service brake + handbrake + rolling resistance) strictly oppose spin & clamp to 0
         const passiveTorque = brakeTorqueNm + rollingResistTorque;
         const maxPassiveDeltaOmega = (passiveTorque / wheelInertia) * subDt;
 
@@ -463,22 +480,39 @@ export class VehicleSolverPlugin implements IModulusPlugin {
       let fxFinal = accumFx / WHEEL_SPIN_SUBSTEPS;
       let fyFinal = combineFrictionCircle(fxFinal, fyPure, maxTireForceN).fy;
 
-      // Stationary parking hold (prevents micro-creep on banked tracks/hills at 0 km/h)
+      // Compute HUD/Audio lockup & tire scrub cues [0..1]
+      const loadCueWeight = clamp(normalLoadN / 2600, 0.2, 1.25);
+      const speedCueWeight = clamp((state.speedMs - 1.5) / 4.5, 0, 1);
+      if (serviceBrakeInput > 0.08 && lastKappa < -0.10) {
+        const rawLock = clamp((-lastKappa - 0.10) / 0.45, 0, 1);
+        w.lockupIntensity = clamp(Math.max(rawLock, absModulating ? 0.35 : 0) * speedCueWeight, 0, 1);
+      } else if (!isFront && handbrakeInput > 0.15 && Math.abs(lastKappa) > 0.2) {
+        w.lockupIntensity = clamp(handbrakeInput * speedCueWeight, 0, 1);
+      } else {
+        w.lockupIntensity = 0;
+      }
+
+      const latScrub = clamp((Math.abs(slipAngleRad) - 0.075) / 0.18, 0, 1);
+      const longScrub = clamp((Math.abs(lastKappa) - 0.14) / 0.42, 0, 1);
+      w.scrubIntensity = clamp(Math.max(latScrub, longScrub * 0.85) * loadCueWeight * speedCueWeight, 0, 1);
+
+      // Stationary parking hold
       if (isParkedHold) {
-        const holdLong = clamp(-vLong * normalLoadN * 1.6, -maxTireForceN * 0.85, maxTireForceN * 0.85);
-        const holdLat = clamp(-vLat * normalLoadN * 1.6, -maxTireForceN * 0.85, maxTireForceN * 0.85);
-        const held = combineFrictionCircle(holdLong, holdLat, maxTireForceN * 0.9);
+        const holdLong = clamp(-vLong * normalLoadN * 1.8, -maxTireForceN * 0.9, maxTireForceN * 0.9);
+        const holdLat = clamp(-vLat * normalLoadN * 1.8, -maxTireForceN * 0.9, maxTireForceN * 0.9);
+        const held = combineFrictionCircle(holdLong, holdLat, maxTireForceN * 0.92);
         fxFinal = held.fx;
         fyFinal = held.fy;
-        w.angularVelocityRadS *= 0.5;
+        w.angularVelocityRadS *= 0.45;
         w.slipRatio = 0;
         w.slipAngleRad = 0;
+        w.lockupIntensity = 0;
+        w.scrubIntensity = 0;
       }
 
       w.longitudinalForceN = fxFinal;
       w.lateralForceN = fyFinal;
 
-      // Apply tire horizontal force at roll-center-adjusted contact point for authentic dive/squat/roll without rollover exploits
       const tireForceWorld: Vec3 = {
         x: wFwd.x * fxFinal + wRight.x * fyFinal,
         y: wFwd.y * fxFinal + wRight.y * fyFinal,
@@ -499,7 +533,7 @@ export class VehicleSolverPlugin implements IModulusPlugin {
 
     // 6. Subtle Caster Self-Centering & High-Speed Yaw Stability Damping
     if (state.speedMs > 2.0) {
-      const casterStability = (sus.casterFrontDeg / 6.0) * 140 * clamp(state.speedMs / 35, 0, 1.5);
+      const casterStability = (sus.casterFrontDeg / 6.0) * 115 * clamp(state.speedMs / 35, 0, 1.5);
       const yawDampTorque = -state.yawRateRadS * casterStability;
       state.torqueAccumulatorWorld.x += state.upWorld.x * yawDampTorque;
       state.torqueAccumulatorWorld.y += state.upWorld.y * yawDampTorque;
