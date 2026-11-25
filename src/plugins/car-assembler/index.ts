@@ -7,6 +7,7 @@ import type {
   IVehicleRuntimeState,
   PartModuleCategory,
 } from '../../core/types';
+import { getCameraPresetSafe, readVehicleSnapshot } from '../../ui/engineBridge';
 import { buildAssembledCar, type IAssembledCarRig } from './buildCarGeometry';
 import { buildLabOverlays, type ILabOverlaysRig } from './buildLabOverlays';
 
@@ -118,6 +119,16 @@ class CarAssemblerController implements IModulusPlugin {
     const compiled = this.compiled;
 
     if (mode === 'lab') {
+      // Ensure exterior canopy, roof & seat are visible in Garage / Lab showcase
+      rig.cabinMesh.visible = true;
+      rig.roofMesh.visible = true;
+      rig.seatMesh.visible = true;
+      rig.cockpitRig.steeringWheelPivot.rotation.z = 0;
+      for (const ledMat of rig.cockpitRig.shiftLedMaterials) {
+        ledMat.emissiveIntensity = 0;
+      }
+      rig.cockpitRig.lockupLedMaterial.emissiveIntensity = 0;
+
       // Park cleanly at studio pedestal (0, 0, 0) resting tires on floor y = 0
       rig.root.position.set(0, 0, 0);
       rig.root.quaternion.identity();
@@ -239,10 +250,53 @@ class CarAssemblerController implements IModulusPlugin {
       }
     }
 
-    // 3. Brake-reactive Taillights
+    // 3. Brake-reactive Taillights & Live Cockpit Instruments / Steering Wheel
     const input = this.ctx.getInputState();
     const isBraking = input.brake > 0.05 || totalBrakeTorque > 80;
     rig.taillightMaterial.emissiveIntensity = isBraking ? 3.4 : 0.75;
+
+    const isCockpitCam = getCameraPresetSafe(this.ctx) === 'cockpit';
+    rig.cabinMesh.visible = !isCockpitCam;
+    rig.roofMesh.visible = !isCockpitCam;
+    rig.seatMesh.visible = !isCockpitCam;
+
+    const snap = readVehicleSnapshot(this.ctx);
+    // Vehicle local +X is Left, +Z is Forward: turning Left (+steer) rotates top of wheel toward +X (-Z rotation)
+    const wheelVisualAngle = Math.max(
+      -2.7,
+      Math.min(2.7, snap.commandedSteer * 2.1 + snap.frontWheelAngleRad * 1.4)
+    );
+    rig.cockpitRig.steeringWheelPivot.rotation.z = -wheelVisualAngle;
+
+    // Live 10-LED RPM / Shift-Light bar (lights progressively from 55% to 97% redline)
+    const rpmFrac = Math.max(0, Math.min(1, snap.engineRpm / Math.max(1000, snap.redlineRpm)));
+    const shiftFlash = rpmFrac >= 0.93 ? (Math.sin(this.elapsedSec * 36) > 0 ? 2.6 : 0.3) : null;
+    for (let i = 0; i < rig.cockpitRig.shiftLedMaterials.length; i++) {
+      const thresh = 0.54 + (i / 9) * 0.41;
+      if (shiftFlash !== null) {
+        rig.cockpitRig.shiftLedMaterials[i].emissiveIntensity = shiftFlash;
+      } else {
+        rig.cockpitRig.shiftLedMaterials[i].emissiveIntensity = rpmFrac >= thresh ? 1.8 : 0.0;
+      }
+    }
+
+    // Lockup & grip-scrub dash warning LED
+    let maxLockup = 0;
+    let maxScrub = 0;
+    for (let i = 0; i < 4; i++) {
+      if (snap.wheels[i].lockupIntensity > maxLockup) maxLockup = snap.wheels[i].lockupIntensity;
+      if (snap.wheels[i].scrubIntensity > maxScrub) maxScrub = snap.wheels[i].scrubIntensity;
+    }
+    if (maxLockup > 0.25) {
+      rig.cockpitRig.lockupLedMaterial.emissive.set('#F43F5E');
+      rig.cockpitRig.lockupLedMaterial.emissiveIntensity = 1.4 + maxLockup * 1.6;
+    } else if (maxScrub > 0.45) {
+      rig.cockpitRig.lockupLedMaterial.emissive.set('#F59E0B');
+      rig.cockpitRig.lockupLedMaterial.emissiveIntensity = maxScrub * 1.4;
+    } else {
+      rig.cockpitRig.lockupLedMaterial.emissiveIntensity = 0;
+    }
+    rig.cockpitRig.dashGlowMaterial.emissiveIntensity = 0.42 + snap.engineLoad * 0.35;
   }
 
   private applyModuleHighlight(activeModule: PartModuleCategory | null): void {

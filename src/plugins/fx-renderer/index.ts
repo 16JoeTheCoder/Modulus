@@ -5,6 +5,12 @@ import type {
   IModulusPlugin,
   IVehicleRuntimeState,
 } from '../../core/types';
+import {
+  getCameraPresetSafe,
+  getCockpitAnchors,
+  readVehicleSnapshot,
+} from '../../ui/engineBridge';
+import { getPlayerSettings, type MotionPreset } from '../../ui/settingsStore';
 import { buildSurfaceFxRig, type ISurfaceFxRig } from './particlesAndSkids';
 import { buildDualEnvironmentRig, type IDualEnvironmentRig } from './studioAndSky';
 
@@ -31,12 +37,21 @@ class FxRendererController implements IModulusPlugin {
   private activePointers = new Map<number, { x: number; y: number }>();
   private prevPinchDist: number | null = null;
 
-  // Chase Camera State
+  // Chase & Cockpit Camera State
   private chaseCamPos = new THREE.Vector3(0, 2.5, -6.5);
   private chaseLookAt = new THREE.Vector3(0, 0.8, 2);
-  private smoothedFov = 58;
+  private smoothedFov = 64;
   private chaseInitialized = false;
   private lastRenderMs = 0;
+
+  // Cockpit Dynamic Motion & Impact Shake State
+  private motionPreset: MotionPreset = getPlayerSettings().motionPreset;
+  private smoothedLookApexX = 0;
+  private smoothedLongHeadZ = 0;
+  private smoothedLatHeadX = 0;
+  private impactShakeAmp = 0;
+  private impactShakeTime = 0;
+  private lastImpactSeq = -1;
 
   // Reusable scratch math objects
   private readonly prevPos = new THREE.Vector3();
@@ -50,18 +65,23 @@ class FxRendererController implements IModulusPlugin {
   private readonly rightVec = new THREE.Vector3();
   private readonly desiredPos = new THREE.Vector3();
   private readonly desiredLook = new THREE.Vector3();
+  private readonly localOffset = new THREE.Vector3();
 
   // Bound event listeners
   private boundPointerDown: (e: PointerEvent) => void;
   private boundPointerMove: (e: PointerEvent) => void;
   private boundPointerUp: (e: PointerEvent) => void;
   private boundWheel: (e: WheelEvent) => void;
+  private boundSettingsChanged: () => void;
 
   constructor() {
     this.boundPointerDown = (e) => this.onPointerDown(e);
     this.boundPointerMove = (e) => this.onPointerMove(e);
     this.boundPointerUp = (e) => this.onPointerUp(e);
     this.boundWheel = (e) => this.onWheel(e);
+    this.boundSettingsChanged = () => {
+      this.motionPreset = getPlayerSettings().motionPreset;
+    };
   }
 
   public init(ctx: IEngineContext): void {
@@ -81,6 +101,7 @@ class FxRendererController implements IModulusPlugin {
       window.addEventListener('pointercancel', this.boundPointerUp, { passive: true });
       canvas.addEventListener('wheel', this.boundWheel, { passive: false });
     }
+    window.addEventListener('modulus:settings-changed', this.boundSettingsChanged);
 
     this.unsubs.push(
       ctx.events.on('mode:changed', () => {
@@ -253,24 +274,84 @@ class FxRendererController implements IModulusPlugin {
     this.upVec.set(0, 1, 0).applyQuaternion(this.interpQuat).normalize();
     this.rightVec.set(-1, 0, 0).applyQuaternion(this.interpQuat).normalize();
 
-    const preset = this.ctx.getCameraPreset();
+    const preset = getCameraPresetSafe(this.ctx);
+    const snap = readVehicleSnapshot(this.ctx);
+    const anchors = getCockpitAnchors(this.ctx.getCompiledVehicle());
+    const motionScale =
+      this.motionPreset === 'reduced' ? 0 : this.motionPreset === 'dynamic' ? 1.45 : 0.85;
 
-    if (preset === 'hood') {
-      // Crisp motorsport bonnet-cockpit POV
-      this.desiredPos
-        .copy(this.interpPos)
-        .addScaledVector(this.forwardVec, 0.52)
-        .addScaledVector(this.upVec, 1.18);
+    // Track impact camera shake trigger
+    if (snap.lastImpact && snap.lastImpact.seq !== this.lastImpactSeq) {
+      this.lastImpactSeq = snap.lastImpact.seq;
+      this.impactShakeAmp = Math.min(0.06, snap.lastImpact.intensity01 * 0.045) * motionScale;
+      this.impactShakeTime = 0;
+    }
+    if (this.impactShakeAmp > 0.0004) {
+      this.impactShakeTime += dt;
+      this.impactShakeAmp *= Math.exp(-dt * 12.0);
+    } else {
+      this.impactShakeAmp = 0;
+    }
+
+    if (preset === 'cockpit') {
+      const eye = anchors.cockpitEyeLocal;
+      const headDamp = 1 - Math.exp(-dt * 8.5);
+      // Subtle braking head-nod & cornering head shift, strictly clamped so wheel/dash never block road
+      const targetLongHead = Math.max(-0.045, Math.min(0.04, -snap.longitudinalG * 0.022)) * motionScale;
+      const targetLatHead = Math.max(-0.04, Math.min(0.04, snap.lateralG * 0.018)) * motionScale;
+      const targetLookApex =
+        Math.max(-2.6, Math.min(2.6, snap.commandedSteer * 1.55 + snap.bodySlipAngleRad * 2.2)) *
+        motionScale;
+
+      this.smoothedLongHeadZ += (targetLongHead - this.smoothedLongHeadZ) * headDamp;
+      this.smoothedLatHeadX += (targetLatHead - this.smoothedLatHeadX) * headDamp;
+      this.smoothedLookApexX += (targetLookApex - this.smoothedLookApexX) * headDamp;
+
+      const shakeX = Math.sin(this.impactShakeTime * 68) * this.impactShakeAmp;
+      const shakeY = Math.cos(this.impactShakeTime * 82) * this.impactShakeAmp * 0.7;
+
+      // Local (+X Left, +Y Up, +Z Forward) transformed directly by interpolated chassis quaternion
+      this.localOffset
+        .set(eye.x + this.smoothedLatHeadX + shakeX, eye.y + shakeY, eye.z + this.smoothedLongHeadZ)
+        .applyQuaternion(this.interpQuat)
+        .add(this.interpPos);
+      cam.position.copy(this.localOffset);
+
+      // Look down the road with subtle look-into-apex cue and gentle downward sightline over hood
       this.desiredLook
-        .copy(this.interpPos)
-        .addScaledVector(this.forwardVec, 18.0)
-        .addScaledVector(this.upVec, 0.92);
+        .set(eye.x + this.smoothedLookApexX, eye.y - 0.16, eye.z + 24.0)
+        .applyQuaternion(this.interpQuat)
+        .add(this.interpPos);
 
-      cam.position.copy(this.desiredPos);
-      cam.up.copy(this.upVec).lerp(THREE.Object3D.DEFAULT_UP, 0.45).normalize();
+      // Horizon-stabilized up vector (100% locked in Reduced motion; subtle chassis banking in Standard/Dynamic)
+      const horizonLock = this.motionPreset === 'reduced' ? 0.85 : 0.55;
+      cam.up.copy(this.upVec).lerp(THREE.Object3D.DEFAULT_UP, horizonLock).normalize();
       cam.lookAt(this.desiredLook);
 
-      const targetFov = 62 + Math.min(12, (state.speedKph / 260) * 12);
+      const speedNorm = Math.min(1, snap.speedMs / 55);
+      const fovGain = this.motionPreset === 'reduced' ? 2.5 : this.motionPreset === 'dynamic' ? 10 : 6;
+      const targetFov = 64 + speedNorm * fovGain;
+      this.smoothedFov += (targetFov - this.smoothedFov) * damp;
+      cam.fov = this.smoothedFov;
+      cam.updateProjectionMatrix();
+    } else if (preset === 'hood') {
+      // Crisp motorsport bonnet-cockpit POV
+      const hood = anchors.hoodCamLocal;
+      this.localOffset
+        .set(hood.x, hood.y, hood.z)
+        .applyQuaternion(this.interpQuat)
+        .add(this.interpPos);
+      this.desiredLook
+        .set(hood.x + snap.commandedSteer * 0.9 * motionScale, hood.y - 0.22, hood.z + 20.0)
+        .applyQuaternion(this.interpQuat)
+        .add(this.interpPos);
+
+      cam.position.copy(this.localOffset);
+      cam.up.copy(this.upVec).lerp(THREE.Object3D.DEFAULT_UP, 0.55).normalize();
+      cam.lookAt(this.desiredLook);
+
+      const speedNorm = Math.min(1, snap.speedMs / 65);
+      const targetFov = 62 + speedNorm * (3 + 7 * motionScale);
       this.smoothedFov += (targetFov - this.smoothedFov) * damp;
       cam.fov = this.smoothedFov;
       cam.updateProjectionMatrix();
@@ -292,10 +373,10 @@ class FxRendererController implements IModulusPlugin {
       cam.fov = this.smoothedFov;
       cam.updateProjectionMatrix();
     } else {
-      // Dynamic Chase Camera with speed-based FOV & G-force lateral swing/lean
+      // Dynamic Chase Camera with speed-based FOV & motion-scaled G-force swing/lean
       const speedNorm = Math.min(1, state.speedKph / 260);
-      const longPull = Math.max(-0.45, Math.min(0.65, state.longitudinalG * 0.35));
-      const latSwing = Math.max(-0.85, Math.min(0.85, state.lateralG * 0.42));
+      const longPull = Math.max(-0.45, Math.min(0.65, state.longitudinalG * 0.35)) * motionScale;
+      const latSwing = Math.max(-0.85, Math.min(0.85, state.lateralG * 0.42)) * motionScale;
 
       const followDist = 5.9 + speedNorm * 0.75 + longPull;
       const followHeight = 2.28 + speedNorm * 0.22;
@@ -329,8 +410,8 @@ class FxRendererController implements IModulusPlugin {
       }
 
       cam.position.copy(this.chaseCamPos);
-      // Subtle horizon roll into lateral cornering G
-      const rollLean = Math.max(-0.045, Math.min(0.045, state.lateralG * 0.022));
+      // Subtle horizon roll into lateral cornering G (zero in reduced motion)
+      const rollLean = Math.max(-0.045, Math.min(0.045, state.lateralG * 0.022)) * motionScale;
       cam.up.set(
         this.rightVec.x * rollLean,
         1.0,
@@ -338,7 +419,7 @@ class FxRendererController implements IModulusPlugin {
       ).normalize();
       cam.lookAt(this.chaseLookAt);
 
-      const targetFov = 58 + speedNorm * 16;
+      const targetFov = 58 + speedNorm * (4 + 10 * motionScale);
       this.smoothedFov += (targetFov - this.smoothedFov) * (1 - Math.exp(-dt * 6.0));
       cam.fov = this.smoothedFov;
       cam.updateProjectionMatrix();
@@ -372,6 +453,7 @@ class FxRendererController implements IModulusPlugin {
     window.removeEventListener('pointermove', this.boundPointerMove);
     window.removeEventListener('pointerup', this.boundPointerUp);
     window.removeEventListener('pointercancel', this.boundPointerUp);
+    window.removeEventListener('modulus:settings-changed', this.boundSettingsChanged);
 
     if (this.ctx) {
       this.envRig?.dispose(this.ctx.scene);

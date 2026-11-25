@@ -160,6 +160,7 @@ function PartSelector({
   onEquip: (part: IPartSchema) => void;
 }) {
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [previewId, setPreviewId] = useState<string | null>(null);
   const [errMsg, setErrMsg] = useState<string | null>(null);
 
   const parts = PARTS_CATALOG.filter(
@@ -169,17 +170,38 @@ function PartSelector({
   const handleSelect = async (part: IPartSchema) => {
     setErrMsg(null);
     if (isOwned(part.id)) {
+      setPreviewId(null);
       onEquip(part);
+      return;
+    }
+    // First click previews part stats & trade-offs before spending credits
+    if (previewId !== part.id) {
+      setPreviewId(part.id);
       return;
     }
     setBusyId(part.id);
     const res = await onPurchase(part.id);
     setBusyId(null);
     if (res.ok) {
+      setPreviewId(null);
       onEquip(part);
     } else if (res.error) {
       setErrMsg(res.error);
     }
+  };
+
+  const formatModPreview = (part: IPartSchema): string => {
+    const m = part.modifiers;
+    const chips: string[] = [];
+    if (m.massKg) chips.push(`${m.massKg > 0 ? '+' : ''}${m.massKg}kg`);
+    if (m.powerMultiplier && m.powerMultiplier !== 1)
+      chips.push(`${m.powerMultiplier > 1 ? '+' : ''}${Math.round((m.powerMultiplier - 1) * 100)}% HP`);
+    if (m.dragCdDelta) chips.push(`${m.dragCdDelta > 0 ? '+' : ''}${m.dragCdDelta.toFixed(2)} Cd`);
+    if (m.downforceClFront || m.downforceClRear)
+      chips.push(`+${((m.downforceClFront ?? 0) + (m.downforceClRear ?? 0)).toFixed(2)} DF`);
+    if (m.peakFrictionMu) chips.push(`μ ${m.peakFrictionMu.toFixed(2)}`);
+    if (m.coolingCapacityKw) chips.push(`${m.coolingCapacityKw}kW cool`);
+    return chips.length > 0 ? chips.join(' · ') : part.description;
   };
 
   return (
@@ -194,6 +216,7 @@ function PartSelector({
         {parts.map((part) => {
           const owned = isOwned(part.id);
           const equipped = equippedPartId === part.id;
+          const isPreviewing = !owned && previewId === part.id;
           const scaledPrice = Math.round(part.price * priceMult);
           const isBusy = busyId === part.id;
 
@@ -206,6 +229,8 @@ function PartSelector({
               className={`flex items-center justify-between gap-2 rounded-lg border px-2.5 py-2 text-left transition ${
                 equipped
                   ? 'border-cyan-400 bg-cyan-500/15 text-white'
+                  : isPreviewing
+                  ? 'border-amber-400 bg-amber-500/15 text-white'
                   : owned
                   ? 'border-slate-800 bg-slate-900/75 text-slate-200 hover:border-slate-600'
                   : 'border-amber-500/30 bg-slate-900/60 text-slate-300 hover:border-amber-400/70'
@@ -216,7 +241,9 @@ function PartSelector({
                   <span className="truncate">{part.name}</span>
                   {equipped && <Check className="h-3.5 w-3.5 shrink-0 text-cyan-400" />}
                 </div>
-                <div className="truncate text-[10px] text-slate-400">{part.description}</div>
+                <div className="truncate text-[10px] text-slate-400">
+                  {isPreviewing ? formatModPreview(part) : part.description}
+                </div>
               </div>
               <div className="shrink-0">
                 {equipped ? (
@@ -227,17 +254,15 @@ function PartSelector({
                   <span className="rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[10px] text-slate-300">
                     OWNED
                   </span>
+                ) : isPreviewing ? (
+                  <span className="flex items-center gap-1 rounded bg-amber-400 px-2 py-0.5 font-mono text-[10px] font-black text-slate-950">
+                    {isBusy ? '...' : `BUY ${scaledPrice.toLocaleString()} CR`}
+                  </span>
                 ) : (
                   <span className="flex items-center gap-1 rounded bg-amber-500/20 px-1.5 py-0.5 font-mono text-[10px] font-bold text-amber-300">
-                    {isBusy ? (
-                      '...'
-                    ) : (
-                      <>
-                        <Lock className="h-2.5 w-2.5" />
-                        <ShoppingCart className="h-2.5 w-2.5" />
-                        {scaledPrice.toLocaleString()} CR
-                      </>
-                    )}
+                    <Lock className="h-2.5 w-2.5" />
+                    <ShoppingCart className="h-2.5 w-2.5" />
+                    {scaledPrice.toLocaleString()} CR
                   </span>
                 )}
               </div>

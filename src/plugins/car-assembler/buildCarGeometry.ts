@@ -1,5 +1,14 @@
 import * as THREE from 'three';
 import type { ICompiledVehicle, PartModuleCategory } from '../../core/types';
+import { getCockpitAnchors } from '../../ui/engineBridge';
+
+export interface ICockpitInteriorRig {
+  group: THREE.Group;
+  steeringWheelPivot: THREE.Group;
+  shiftLedMaterials: THREE.MeshStandardMaterial[];
+  lockupLedMaterial: THREE.MeshStandardMaterial;
+  dashGlowMaterial: THREE.MeshStandardMaterial;
+}
 
 export interface IWheelVisualRig {
   /** Root anchored to carRoot; moves vertically with suspension */
@@ -20,6 +29,14 @@ export interface IAssembledCarRig {
   root: THREE.Group;
   /** Sprung chassis body group (shifts with rideHeight in Lab mode) */
   bodyGroup: THREE.Group;
+  /** Exterior canopy glass mesh (hidden in cockpit POV for unobstructed sightlines) */
+  cabinMesh: THREE.Mesh;
+  /** Exterior roof cap mesh (hidden in cockpit POV to avoid low overhang clipping) */
+  roofMesh: THREE.Mesh;
+  /** Interior bucket seat mesh (hidden in cockpit POV to avoid camera clip) */
+  seatMesh: THREE.Mesh;
+  /** Live cockpit interior rig (dash, A-pillars, mirrors, steering wheel, shift LEDs) */
+  cockpitRig: ICockpitInteriorRig;
   /** All primary exterior body shell meshes for X-Ray Wireframe toggle */
   bodyShellMaterials: THREE.MeshStandardMaterial[];
   /** Crisp cyan holographic edge lines shown when X-Ray Wireframe is active */
@@ -351,11 +368,220 @@ export function buildAssembledCar(compiled: ICompiledVehicle): IAssembledCarRig 
   // =========================================================================
   // 2. VISIBLE COCKPIT INTERIOR + ROLL CAGE (Half-Cage / Full FIA Welded)
   // =========================================================================
+  const anchors = getCockpitAnchors(compiled);
+  const wheelAnchor = anchors.steeringWheelLocal;
+  const driverX = wheelAnchor.x;
+
   const seatGeo = track(new THREE.BoxGeometry(0.44, 0.52, 0.42));
   const seatMesh = new THREE.Mesh(seatGeo, darkTrimMat);
-  seatMesh.position.set(bodyStyle === 'prototype' ? 0 : 0.26, 0.56, -0.14);
+  seatMesh.position.set(driverX, 0.56, anchors.cockpitEyeLocal.z - 0.08);
   seatMesh.rotation.x = -0.18;
   bodyGroup.add(seatMesh);
+
+  // Sculpted Motorsport Cockpit Interior (Dash, Binnacle, Live Shift LEDs, Steering Wheel, A-Pillars, Mirrors)
+  const cockpitGroup = new THREE.Group();
+  cockpitGroup.name = 'vehicle_cockpit_interior';
+  bodyGroup.add(cockpitGroup);
+
+  const dashMat = track(
+    new THREE.MeshStandardMaterial({
+      color: '#111620',
+      roughness: 0.85,
+      metalness: 0.12,
+      flatShading: true,
+    })
+  );
+  const alcantaraMat = track(
+    new THREE.MeshStandardMaterial({
+      color: '#1A202C',
+      roughness: 0.94,
+      metalness: 0.05,
+    })
+  );
+  const dashGlowMaterial = track(
+    new THREE.MeshStandardMaterial({
+      color: '#0A1624',
+      emissive: '#00F0FF',
+      emissiveIntensity: 0.55,
+      roughness: 0.25,
+      metalness: 0.2,
+    })
+  );
+  const lockupLedMaterial = track(
+    new THREE.MeshStandardMaterial({
+      color: '#3B0D14',
+      emissive: '#F43F5E',
+      emissiveIntensity: 0.0,
+      roughness: 0.2,
+    })
+  );
+
+  const cabinInnerW = bodyWidth * cabinWidthRatio * 1.06;
+  const dashY = wheelAnchor.y - 0.03;
+  const dashZ = wheelAnchor.z + 0.25;
+
+  // Main upper dash cowl (covers lower fuselage deck cleanly inside cabin while keeping hood visible)
+  const dashCowlGeo = track(new THREE.BoxGeometry(cabinInnerW, 0.14, 0.44));
+  const dashCowl = new THREE.Mesh(dashCowlGeo, dashMat);
+  dashCowl.position.set(0, dashY, dashZ);
+  cockpitGroup.add(dashCowl);
+
+  // Dark lower dash / knee bolster apron behind steering wheel so body shell never bleeds into cockpit
+  const apronGeo = track(new THREE.BoxGeometry(cabinInnerW * 1.08, 0.12, 0.72));
+  const apronMesh = new THREE.Mesh(apronGeo, dashMat);
+  apronMesh.position.set(0, dashY - 0.04, wheelAnchor.z - 0.08);
+  cockpitGroup.add(apronMesh);
+
+  // Center tunnel / console divider
+  const consoleGeo = track(new THREE.BoxGeometry(0.18, 0.24, 0.72));
+  const consoleMesh = new THREE.Mesh(consoleGeo, dashMat);
+  consoleMesh.position.set(0, 0.52, wheelAnchor.z - 0.12);
+  cockpitGroup.add(consoleMesh);
+
+  // Driver instrument binnacle hood & backlit display panel
+  const binnacleGeo = track(new THREE.BoxGeometry(0.32, 0.10, 0.14));
+  const binnacle = new THREE.Mesh(binnacleGeo, alcantaraMat);
+  binnacle.position.set(driverX, dashY + 0.095, wheelAnchor.z + 0.19);
+  cockpitGroup.add(binnacle);
+
+  const clusterScreenGeo = track(new THREE.PlaneGeometry(0.24, 0.06));
+  const clusterScreen = new THREE.Mesh(clusterScreenGeo, dashGlowMaterial);
+  clusterScreen.position.set(driverX, dashY + 0.088, wheelAnchor.z + 0.118);
+  clusterScreen.rotation.y = Math.PI; // face backward toward driver (-Z)
+  cockpitGroup.add(clusterScreen);
+
+  // 10-segment live 3D RPM / Shift-light LED bar on top of binnacle
+  const shiftLedMaterials: THREE.MeshStandardMaterial[] = [];
+  const ledGeo = track(new THREE.BoxGeometry(0.018, 0.012, 0.012));
+  const ledSpan = 0.21;
+  for (let i = 0; i < 10; i++) {
+    const colorHex = i < 4 ? '#10B981' : i < 7 ? '#F59E0B' : '#F43F5E';
+    const ledMat = track(
+      new THREE.MeshStandardMaterial({
+        color: '#1E293B',
+        emissive: colorHex,
+        emissiveIntensity: 0,
+        roughness: 0.25,
+      })
+    );
+    shiftLedMaterials.push(ledMat);
+    const led = new THREE.Mesh(ledGeo, ledMat);
+    // In local +X = Left, i=0 starts on left (+ledSpan/2) and sweeps to right (-ledSpan/2)
+    const lx = driverX + ledSpan * 0.5 - (ledSpan * i) / 9;
+    led.position.set(lx, dashY + 0.148, wheelAnchor.z + 0.125);
+    cockpitGroup.add(led);
+  }
+
+  // Brake Lockup / Grip-Limit Warning LED strip on left & right of binnacle
+  const warnGeo = track(new THREE.BoxGeometry(0.026, 0.014, 0.012));
+  for (const sx of [-0.142, 0.142]) {
+    const warnLed = new THREE.Mesh(warnGeo, lockupLedMaterial);
+    warnLed.position.set(driverX + sx, dashY + 0.142, wheelAnchor.z + 0.125);
+    cockpitGroup.add(warnLed);
+  }
+
+  // Steering Column + Rotating 3D Motorsport Steering Wheel
+  const colGeo = track(new THREE.CylinderGeometry(0.028, 0.034, 0.22, 8));
+  colGeo.rotateX(Math.PI / 2);
+  const colMesh = new THREE.Mesh(colGeo, dashMat);
+  colMesh.position.set(driverX, wheelAnchor.y - 0.045, wheelAnchor.z + 0.11);
+  colMesh.rotation.x = 0.24;
+  cockpitGroup.add(colMesh);
+
+  const steeringWheelTiltGroup = new THREE.Group();
+  steeringWheelTiltGroup.position.set(wheelAnchor.x, wheelAnchor.y - 0.025, wheelAnchor.z);
+  steeringWheelTiltGroup.rotation.x = 0.24; // ergonomic tilt toward driver
+  cockpitGroup.add(steeringWheelTiltGroup);
+
+  const steeringWheelPivot = new THREE.Group();
+  steeringWheelPivot.name = 'cockpit_steering_wheel_pivot';
+  steeringWheelTiltGroup.add(steeringWheelPivot);
+
+  const wheelRadius = 0.138;
+  const rimGeo = track(new THREE.TorusGeometry(wheelRadius, 0.015, 8, 22));
+  const rimMesh = new THREE.Mesh(rimGeo, alcantaraMat);
+  steeringWheelPivot.add(rimMesh);
+
+  // Top-center 12-o'clock alignment band (critical visual steering cue!)
+  const bandGeo = track(new THREE.BoxGeometry(0.022, 0.034, 0.034));
+  const bandMesh = new THREE.Mesh(bandGeo, accentMat);
+  bandMesh.position.set(0, wheelRadius, 0);
+  steeringWheelPivot.add(bandMesh);
+
+  // 3-spoke motorsport steering wheel arms & center boss
+  const bossGeo = track(new THREE.CylinderGeometry(0.035, 0.038, 0.028, 10));
+  bossGeo.rotateX(Math.PI / 2);
+  const bossMesh = new THREE.Mesh(bossGeo, darkTrimMat);
+  steeringWheelPivot.add(bossMesh);
+
+  const spokeHGeo = track(new THREE.BoxGeometry(wheelRadius * 1.85, 0.022, 0.012));
+  const spokeH = new THREE.Mesh(spokeHGeo, darkTrimMat);
+  spokeH.position.set(0, -0.01, 0.004);
+  steeringWheelPivot.add(spokeH);
+
+  const spokeVGeo = track(new THREE.BoxGeometry(0.026, wheelRadius * 0.92, 0.012));
+  const spokeV = new THREE.Mesh(spokeVGeo, darkTrimMat);
+  spokeV.position.set(0, -wheelRadius * 0.48, 0.004);
+  steeringWheelPivot.add(spokeV);
+
+  // Windshield A-Pillars + Header Frame + Sleek Interior Rearview Mirror + Side Mirrors
+  const addCockpitPillar = (p1: THREE.Vector3, p2: THREE.Vector3, radius: number) => {
+    const dir = new THREE.Vector3().subVectors(p2, p1);
+    const len = dir.length();
+    const pGeo = track(new THREE.CylinderGeometry(radius, radius, len, 6));
+    const pMesh = new THREE.Mesh(pGeo, dashMat);
+    pMesh.position.copy(p1).add(p2).multiplyScalar(0.5);
+    pMesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
+    cockpitGroup.add(pMesh);
+  };
+
+  const aBaseZ = halfWb * 0.67;
+  const aTopZ = halfWb * 0.24;
+  const aBaseX = cabinInnerW * 0.52;
+  const aTopX = cabinInnerW * 0.46;
+  const aBaseY = dashY + 0.04;
+  const aTopY = roofY + 0.04;
+  addCockpitPillar(
+    new THREE.Vector3(aBaseX, aBaseY, aBaseZ),
+    new THREE.Vector3(aTopX, aTopY, aTopZ),
+    0.015
+  );
+  addCockpitPillar(
+    new THREE.Vector3(-aBaseX, aBaseY, aBaseZ),
+    new THREE.Vector3(-aTopX, aTopY, aTopZ),
+    0.015
+  );
+  addCockpitPillar(
+    new THREE.Vector3(aTopX, aTopY, aTopZ),
+    new THREE.Vector3(-aTopX, aTopY, aTopZ),
+    0.014
+  );
+
+  // Subtle interior rearview mirror tucked high near header
+  const rearMirrorGeo = track(new THREE.BoxGeometry(0.13, 0.028, 0.016));
+  const rearMirror = new THREE.Mesh(rearMirrorGeo, dashMat);
+  rearMirror.position.set(0, roofY - 0.01, aTopZ + 0.08);
+  cockpitGroup.add(rearMirror);
+
+  // Exterior Side Wing Mirrors (gives clear width reference in cockpit & chase)
+  const sideMirrorGeo = track(new THREE.BoxGeometry(0.14, 0.075, 0.09));
+  const sideStalkGeo = track(new THREE.BoxGeometry(0.08, 0.025, 0.04));
+  for (const sx of [-1, 1]) {
+    const stalk = new THREE.Mesh(sideStalkGeo, darkTrimMat);
+    stalk.position.set(sx * (bodyWidth * 0.46), dashY + 0.09, aBaseZ - 0.14);
+    cockpitGroup.add(stalk);
+    const mirror = new THREE.Mesh(sideMirrorGeo, primaryPaintMat);
+    mirror.position.set(sx * (bodyWidth * 0.53), dashY + 0.11, aBaseZ - 0.14);
+    cockpitGroup.add(mirror);
+  }
+
+  const cockpitRig: ICockpitInteriorRig = {
+    group: cockpitGroup,
+    steeringWheelPivot,
+    shiftLedMaterials,
+    lockupLedMaterial,
+    dashGlowMaterial,
+  };
 
   if (build.chassis.rollCage !== 'None') {
     const cageMat = registerMat('chassis', {
@@ -887,6 +1113,10 @@ export function buildAssembledCar(compiled: ICompiledVehicle): IAssembledCarRig 
   return {
     root,
     bodyGroup,
+    cabinMesh,
+    roofMesh,
+    seatMesh,
+    cockpitRig,
     bodyShellMaterials,
     xrayLinesGroup,
     taillightMaterial,
