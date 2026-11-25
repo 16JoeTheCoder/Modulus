@@ -1,0 +1,85 @@
+{
+  "id": "track_switchyard_sprint",
+  "trackVersion": "v1.0.0",
+  "name": "Switchyard Sprint",
+  "country": "Indonesia",
+  "description": "A compact club circuit links two braking-zone passing opportunities with a left-right infield. A strong exit from the final bend matters for the whole next straight.",
+  "difficulty": "Beginner",
+  "courseTags": ["race"],
+  "suggestedLaps": 6,
+  "baseLapRewardCredits": 2400,
+  "targetGoldTimeMs": 65000,
+  "targetSilverTimeMs": 75000,
+  "targetBronzeTimeMs": 88000,
+  "ambientTempC": 27,
+  "trackTempC": 34,
+  "defaultWidthM": 11.2,
+  "skyZenithHex": "#5486A1",
+  "skyHorizonHex": "#E8CFBA",
+  "sunColorHex": "#FFF0DA",
+  "groundColorHex": "#62736D",
+  "treeDensity": 0.12,
+  "rockDensity": 0.02,
+  "closed": true,
+  "sectorFractions": [
+    0.277778,
+    0.666667
+  ],
+  "sectors": [
+    {
+      "index": 0,
+      "name": "Main Straight",
+      "startT": 0,
+      "endT": 0.277778,
+      "surface": "tarmac"
+    },
+    {
+      "index": 1,
+      "name": "Infield S",
+      "startT": 0.277778,
+      "endT": 0.666667,
+      "surface": "tarmac"
+    },
+    {
+      "index": 2,
+      "name": "Freight Hairpin",
+      "startT": 0.666667,
+      "endT": 1,
+      "surface": "tarmac"
+    }
+  ],
+  "passingZones": [
+    {
+      "id": "pz_main_straight",
+      "name": "Main Straight Approach",
+      "startT": 0.944444,
+      "endT": 0.083333
+    },
+    {
+      "id": "pz_freight_approach",
+      "name": "Freight Hairpin Approach",
+      "startT": 0.555556,
+      "endT": 0.666667
+    }
+  ],
+  "controlPoints": [
+    { "x": 0, "y": 2, "z": 0, "widthM": 13, "bankDeg": 0 },
+    { "x": 0, "y": 2, "z": 126, "widthM": 13, "bankDeg": 0 },
+    { "x": -39, "y": 2, "z": 198, "widthM": 12, "bankDeg": 0 },
+    { "x": -30, "y": 2.5, "z": 282, "widthM": 11, "bankDeg": 1 },
+    { "x": 43, "y": 3, "z": 334, "widthM": 11, "bankDeg": 2 },
+    { "x": 121, "y": 3.5, "z": 307, "widthM": 11, "bankDeg": 2 },
+    { "x": 152, "y": 4, "z": 244, "widthM": 10.2, "bankDeg": 1 },
+    { "x": 138, "y": 4.5, "z": 174, "widthM": 10.2, "bankDeg": -2 },
+    { "x": 181, "y": 4.5, "z": 145, "widthM": 11, "bankDeg": -2 },
+    { "x": 232, "y": 4, "z": 172, "widthM": 11, "bankDeg": 2 },
+    { "x": 297, "y": 3.4, "z": 139, "widthM": 12.5, "bankDeg": 1 },
+    { "x": 322, "y": 2.7, "z": 63, "widthM": 13, "bankDeg": 0 },
+    { "x": 279, "y": 2.3, "z": 5, "widthM": 12.5, "bankDeg": 2 },
+    { "x": 207, "y": 2, "z": -12, "widthM": 11, "bankDeg": 2 },
+    { "x": 152, "y": 2, "z": -74, "widthM": 11, "bankDeg": -1 },
+    { "x": 86, "y": 2, "z": -114, "widthM": 11, "bankDeg": 2 },
+    { "x": 26, "y": 2, "z": -86, "widthM": 12, "bankDeg": 2 },
+    { "x": 0, "y": 2, "z": -42, "widthM": 13, "bankDeg": 0 }
+  ]
+}

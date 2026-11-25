@@ -1,20 +1,31 @@
 import * as THREE from 'three';
+import type {
+  ITrackCollisionHandle,
+  ITrackRenderHandle,
+} from '../../contracts/simulation';
 import { DeterministicPrng } from '../../core/math/prng';
-import { TrackSpline, type ISplineSample } from '../../core/math/spline';
+import {
+  TRACK_KERB_WIDTH_M,
+  TRACK_RUNOFF_WIDTH_M,
+  type ISplineSample,
+} from '../../core/math/spline';
 import type { ITrackGeometryData, ITrackSplineSchema, Vec3 } from '../../core/types';
+import { buildTrackCollision } from './buildTrackCollision';
+
+export interface ITrackGeometryDataV2 extends ITrackGeometryData {
+  collisionHandle: ITrackCollisionHandle;
+  renderHandle: ITrackRenderHandle;
+}
 
 export interface IBuiltTrackBundle {
   group: THREE.Group;
-  geometryData: ITrackGeometryData;
+  geometryData: ITrackGeometryDataV2;
+  collisionHandle: ITrackCollisionHandle;
+  renderHandle: ITrackRenderHandle;
   dispose: () => void;
 }
 
-const SAMPLE_COUNT = 480;
-const KERB_WIDTH_M = 1.05;
-const RUNOFF_WIDTH_M = 5.4;
 const WHITE_LINE_WIDTH_M = 0.24;
-const WALL_HEIGHT_M = 1.65;
-const WALL_BELOW_M = 0.35;
 
 interface StripDef {
   latA: number;
@@ -86,14 +97,112 @@ function pushQuadDoubleColor(
 }
 
 /**
- * Builds collision trimesh (road + kerbs + runoff, plus inner containment walls)
- * and Art-of-Rally sunlit faceted visual geometry for any ITrackSplineSchema.
+ * Spatial hash over all spline samples in XZ for fast exact terrain-clearance & prop setback queries.
+ */
+class SplineSpatialIndex {
+  private readonly cellSize: number;
+  private readonly buckets = new Map<string, ISplineSample[]>();
+  private readonly allSamples: ISplineSample[];
+
+  constructor(samples: ISplineSample[], cellSize = 24) {
+    this.cellSize = cellSize;
+    this.allSamples = samples;
+    for (let i = 0; i < samples.length; i++) {
+      const s = samples[i];
+      const cx = Math.floor(s.position.x / cellSize);
+      const cz = Math.floor(s.position.z / cellSize);
+      const key = `${cx},${cz}`;
+      let list = this.buckets.get(key);
+      if (!list) {
+        list = [];
+        this.buckets.set(key, list);
+      }
+      list.push(s);
+    }
+  }
+
+  public queryClearance(
+    wx: number,
+    wz: number,
+    corridorExtraM: number
+  ): {
+    nearestSample: ISplineSample;
+    nearestDist: number;
+    inCorridor: boolean;
+    minCorridorRoadY: number;
+  } {
+    const cx = Math.floor(wx / this.cellSize);
+    const cz = Math.floor(wz / this.cellSize);
+    const searchRadiusCells = Math.max(2, Math.ceil((28 + corridorExtraM) / this.cellSize));
+
+    let nearestDistSq = Infinity;
+    let nearestSample: ISplineSample | null = null;
+    let inCorridor = false;
+    let minCorridorRoadY = Infinity;
+
+    for (let dz = -searchRadiusCells; dz <= searchRadiusCells; dz++) {
+      for (let dx = -searchRadiusCells; dx <= searchRadiusCells; dx++) {
+        const list = this.buckets.get(`${cx + dx},${cz + dz}`);
+        if (!list) continue;
+        for (let i = 0; i < list.length; i++) {
+          const sp = list[i];
+          const ddx = wx - sp.position.x;
+          const ddz = wz - sp.position.z;
+          const d2 = ddx * ddx + ddz * ddz;
+          if (d2 < nearestDistSq) {
+            nearestDistSq = d2;
+            nearestSample = sp;
+          }
+          const outerLat = sp.widthM * 0.5 + TRACK_KERB_WIDTH_M + TRACK_RUNOFF_WIDTH_M;
+          const cRad = outerLat + corridorExtraM;
+          if (d2 <= cRad * cRad) {
+            inCorridor = true;
+            // Account for worst-case banking dip at the outer edge
+            const edgeDip = Math.abs(Math.sin(sp.bankRad)) * outerLat;
+            const lowY = sp.position.y - edgeDip;
+            if (lowY < minCorridorRoadY) {
+              minCorridorRoadY = lowY;
+            }
+          }
+        }
+      }
+    }
+
+    // Fallback scan for distant outer-rim terrain vertices outside local search window
+    if (!nearestSample) {
+      const step = Math.max(1, Math.floor(this.allSamples.length / 180));
+      for (let i = 0; i < this.allSamples.length; i += step) {
+        const sp = this.allSamples[i];
+        const ddx = wx - sp.position.x;
+        const ddz = wz - sp.position.z;
+        const d2 = ddx * ddx + ddz * ddz;
+        if (d2 < nearestDistSq) {
+          nearestDistSq = d2;
+          nearestSample = sp;
+        }
+      }
+    }
+
+    const best = nearestSample ?? this.allSamples[0];
+    return {
+      nearestSample: best,
+      nearestDist: Math.sqrt(nearestDistSq),
+      inCorridor,
+      minCorridorRoadY: inCorridor ? minCorridorRoadY : best.position.y,
+    };
+  }
+}
+
+/**
+ * Builds canonical collision handle (via pure-math `buildTrackCollision`) and
+ * Art-of-Rally sunlit faceted visual geometry + terrain clearance corridor for any `ITrackSplineSchema`.
  */
 export function buildTrackBundle(schema: ITrackSplineSchema): IBuiltTrackBundle {
-  const spline = new TrackSpline(schema, SAMPLE_COUNT);
+  const { spline, collisionHandle } = buildTrackCollision(schema);
   const samples = spline.samples;
   const n = samples.length;
   const prng = new DeterministicPrng(schema.id);
+  const spatialIndex = new SplineSpatialIndex(samples, 24);
 
   const root = new THREE.Group();
   root.name = `track_${schema.id}`;
@@ -104,7 +213,7 @@ export function buildTrackBundle(schema: ITrackSplineSchema): IBuiltTrackBundle 
     return res;
   };
 
-  // Smooth signed curvature for racing line rubber wear shading
+  // Smooth signed curvature for racing-line rubber groove shading
   const smoothedCurv = new Float32Array(n);
   for (let i = 0; i < n; i++) {
     let sum = 0;
@@ -116,147 +225,7 @@ export function buildTrackBundle(schema: ITrackSplineSchema): IBuiltTrackBundle 
   }
 
   // =========================================================================
-  // 1. PHYSICS COLLISION TRIMESH (Shared indexed vertices, watertight loop)
-  // =========================================================================
-  const COLL_COLS = 9;
-  const roadVertices = new Float32Array(n * COLL_COLS * 3);
-  const roadIndices = new Uint32Array(n * (COLL_COLS - 1) * 6);
-  const triangleSurfaces = new Uint8Array(n * (COLL_COLS - 1) * 2);
-
-  for (let i = 0; i < n; i++) {
-    const s = samples[i];
-    const halfW = s.widthM * 0.5;
-    const outerLat = halfW + KERB_WIDTH_M + RUNOFF_WIDTH_M;
-    const kerbLat = halfW + KERB_WIDTH_M;
-
-    const colLats = [
-      -outerLat,
-      -kerbLat,
-      -halfW,
-      -halfW * 0.5,
-      0,
-      halfW * 0.5,
-      halfW,
-      kerbLat,
-      outerLat,
-    ];
-    const colUps = [
-      -0.08,
-      s.kerbLeft ? 0.025 : -0.02,
-      s.kerbLeft ? 0.04 : 0.0,
-      0.015,
-      0.02,
-      0.015,
-      s.kerbRight ? 0.04 : 0.0,
-      s.kerbRight ? 0.025 : -0.02,
-      -0.08,
-    ];
-
-    for (let c = 0; c < COLL_COLS; c++) {
-      const p = evalSurfacePoint(s, colLats[c], colUps[c]);
-      const vIdx = (i * COLL_COLS + c) * 3;
-      roadVertices[vIdx] = p.x;
-      roadVertices[vIdx + 1] = p.y;
-      roadVertices[vIdx + 2] = p.z;
-    }
-  }
-
-  let idxCursor = 0;
-  let triCursor = 0;
-  for (let i = 0; i < n; i++) {
-    const iNext = (i + 1) % n;
-    const s = samples[i];
-    for (let c = 0; c < COLL_COLS - 1; c++) {
-      const v00 = i * COLL_COLS + c;
-      const v01 = i * COLL_COLS + (c + 1);
-      const v10 = iNext * COLL_COLS + c;
-      const v11 = iNext * COLL_COLS + (c + 1);
-
-      roadIndices[idxCursor++] = v00;
-      roadIndices[idxCursor++] = v01;
-      roadIndices[idxCursor++] = v10;
-
-      roadIndices[idxCursor++] = v01;
-      roadIndices[idxCursor++] = v11;
-      roadIndices[idxCursor++] = v10;
-
-      // Surface ID: 0 = tarmac, 1 = kerb, 2 = grass
-      let surf = 0;
-      if (c === 0 || c === 7) surf = 2;
-      else if (c === 1) surf = s.kerbLeft ? 1 : 2;
-      else if (c === 6) surf = s.kerbRight ? 1 : 2;
-      else surf = 0;
-
-      triangleSurfaces[triCursor++] = surf;
-      triangleSurfaces[triCursor++] = surf;
-    }
-  }
-
-  // =========================================================================
-  // 2. PHYSICS CONTAINMENT WALLS (Left + Right guardrails at outer runoff)
-  // =========================================================================
-  // 2 sides * n samples * 2 verts (bottom, top)
-  const wallVertices = new Float32Array(n * 4 * 3);
-  const wallIndices = new Uint32Array(n * 2 * 6);
-
-  for (let i = 0; i < n; i++) {
-    const s = samples[i];
-    const outerLat = s.widthM * 0.5 + KERB_WIDTH_M + RUNOFF_WIDTH_M;
-    const pLB = evalSurfacePoint(s, -outerLat, -WALL_BELOW_M);
-    const pLT = evalSurfacePoint(s, -outerLat, WALL_HEIGHT_M);
-    const pRB = evalSurfacePoint(s, outerLat, -WALL_BELOW_M);
-    const pRT = evalSurfacePoint(s, outerLat, WALL_HEIGHT_M);
-
-    const base = i * 4 * 3;
-    wallVertices[base] = pLB.x;
-    wallVertices[base + 1] = pLB.y;
-    wallVertices[base + 2] = pLB.z;
-
-    wallVertices[base + 3] = pLT.x;
-    wallVertices[base + 4] = pLT.y;
-    wallVertices[base + 5] = pLT.z;
-
-    wallVertices[base + 6] = pRB.x;
-    wallVertices[base + 7] = pRB.y;
-    wallVertices[base + 8] = pRB.z;
-
-    wallVertices[base + 9] = pRT.x;
-    wallVertices[base + 10] = pRT.y;
-    wallVertices[base + 11] = pRT.z;
-  }
-
-  let wIdx = 0;
-  for (let i = 0; i < n; i++) {
-    const iNext = (i + 1) % n;
-    const lb0 = i * 4;
-    const lt0 = i * 4 + 1;
-    const rb0 = i * 4 + 2;
-    const rt0 = i * 4 + 3;
-
-    const lb1 = iNext * 4;
-    const lt1 = iNext * 4 + 1;
-    const rb1 = iNext * 4 + 2;
-    const rt1 = iNext * 4 + 3;
-
-    // Left wall inward normal (+right): (lb0, lb1, lt0), (lb1, lt1, lt0)
-    wallIndices[wIdx++] = lb0;
-    wallIndices[wIdx++] = lb1;
-    wallIndices[wIdx++] = lt0;
-    wallIndices[wIdx++] = lb1;
-    wallIndices[wIdx++] = lt1;
-    wallIndices[wIdx++] = lt0;
-
-    // Right wall inward normal (-right): (rb0, rt0, rb1), (rb1, rt0, rt1)
-    wallIndices[wIdx++] = rb0;
-    wallIndices[wIdx++] = rt0;
-    wallIndices[wIdx++] = rb1;
-    wallIndices[wIdx++] = rb1;
-    wallIndices[wIdx++] = rt0;
-    wallIndices[wIdx++] = rt1;
-  }
-
-  // =========================================================================
-  // 3. VISUAL ROAD + KERBS + RUNOFF RIBBON (Art of Rally Vertex-Colored)
+  // 1. VISUAL ROAD + KERBS + RUNOFF RIBBON (Art of Rally Vertex-Colored)
   // =========================================================================
   const roadPos: number[] = [];
   const roadCol: number[] = [];
@@ -264,22 +233,33 @@ export function buildTrackBundle(schema: ITrackSplineSchema): IBuiltTrackBundle 
   const groundBase = new THREE.Color(schema.groundColorHex);
   const asphaltBase = new THREE.Color('#2E3440');
   const asphaltGroove = new THREE.Color('#1F242D');
-  const asphaltLight = new THREE.Color('#39404E');
+  const gravelBase = new THREE.Color('#9A866E');
+  const gravelGroove = new THREE.Color('#7D6B55');
   const whitePaint = new THREE.Color('#F1F5F9');
   const kerbRed = new THREE.Color('#DC2626');
   const kerbWhite = new THREE.Color('#F8FAFC');
   const concreteEdge = new THREE.Color('#94A3B8');
   const checkerDark = new THREE.Color('#111827');
+  const sector1Amber = new THREE.Color('#F59E0B');
+  const sector2Cyan = new THREE.Color('#00F0FF');
   const tmpColor = new THREE.Color();
   const tmpColor2 = new THREE.Color();
 
+  const sectorGateIndices = new Map<number, THREE.Color>();
+  if (schema.sectorFractions[0] > 0 && schema.sectorFractions[0] < 1) {
+    sectorGateIndices.set(Math.round(schema.sectorFractions[0] * n) % n, sector1Amber);
+  }
+  if (schema.sectorFractions[1] > 0 && schema.sectorFractions[1] < 1) {
+    sectorGateIndices.set(Math.round(schema.sectorFractions[1] * n) % n, sector2Cyan);
+  }
+
   const buildStrips = (s: ISplineSample, segIndex: number): StripDef[] => {
     const hw = s.widthM * 0.5;
-    const outerLat = hw + KERB_WIDTH_M + RUNOFF_WIDTH_M;
-    const kerbLat = hw + KERB_WIDTH_M;
+    const outerLat = hw + TRACK_KERB_WIDTH_M + TRACK_RUNOFF_WIDTH_M;
+    const kerbLat = hw + TRACK_KERB_WIDTH_M;
     const innerLine = hw - WHITE_LINE_WIDTH_M;
-    const kerbWaveL = s.kerbLeft ? (segIndex % 2 === 0 ? 0.065 : 0.04) : -0.015;
-    const kerbWaveR = s.kerbRight ? (segIndex % 2 === 0 ? 0.065 : 0.04) : -0.015;
+    const kerbWaveL = s.kerbLeft ? (segIndex % 2 === 0 ? 0.06 : 0.038) : -0.015;
+    const kerbWaveR = s.kerbRight ? (segIndex % 2 === 0 ? 0.06 : 0.038) : -0.015;
 
     return [
       { latA: -outerLat, latB: -kerbLat, yA: -0.08, yB: -0.015, kind: 'grassL' },
@@ -303,9 +283,12 @@ export function buildTrackBundle(schema: ITrackSplineSchema): IBuiltTrackBundle 
     const strips1 = buildStrips(s1, iNext);
     const hw = s0.widthM * 0.5;
 
-    // Racing line shifts toward inside apex
     const grooveLat = Math.max(-0.78, Math.min(0.78, smoothedCurv[i] * 135)) * hw;
-    const noise = (prng.next() - 0.5) * 0.028;
+    const noise = (prng.next() - 0.5) * 0.026;
+    const isGravel = s0.surface === 'gravel' || s0.surface === 'dirt';
+    const baseRoadColor = isGravel ? gravelBase : asphaltBase;
+    const grooveRoadColor = isGravel ? gravelGroove : asphaltGroove;
+    const sectorStripeColor = sectorGateIndices.get(i);
 
     for (let k = 0; k < strips0.length; k++) {
       const a0 = strips0[k];
@@ -316,34 +299,38 @@ export function buildTrackBundle(schema: ITrackSplineSchema): IBuiltTrackBundle 
       const p11 = evalSurfacePoint(s1, a1.latB, a1.yB);
 
       if (a0.kind === 'tarmac') {
-        // Start/finish checkered line right at i === 0 and i === 1
-        if (i === 0 || i === 1) {
+        // Start/finish checkered line right at i === 0 and i === n - 1 (centered on t = 0)
+        if (i === 0 || i === n - 1) {
           const lane = a0.tarmacLane ?? 0;
-          const isWhite = (lane + i) % 2 === 0;
+          const row = i === 0 ? 0 : 1;
+          const isWhite = (lane + row) % 2 === 0;
           tmpColor.copy(isWhite ? whitePaint : checkerDark);
           pushQuadNonIndexed(roadPos, roadCol, p00, p01, p10, p11, tmpColor);
+        } else if (sectorStripeColor) {
+          // Crisp painted sector timing line matching sector gantry accent
+          tmpColor.copy(baseRoadColor).lerp(sectorStripeColor, 0.58);
+          pushQuadNonIndexed(roadPos, roadCol, p00, p01, p10, p11, tmpColor);
         } else {
-          // Subtle racing-line rubber groove + warm sunlit tarmac facet variation
           const dA = Math.abs(a0.latA - grooveLat) / hw;
           const dB = Math.abs(a0.latB - grooveLat) / hw;
           const wearA = Math.exp(-dA * dA * 3.8);
           const wearB = Math.exp(-dB * dB * 3.8);
 
-          tmpColor.copy(asphaltBase).lerp(asphaltGroove, wearA * 0.72);
+          tmpColor.copy(baseRoadColor).lerp(grooveRoadColor, wearA * 0.72);
           tmpColor.offsetHSL(0, 0, noise);
 
-          tmpColor2.copy(asphaltBase).lerp(asphaltGroove, wearB * 0.72);
+          tmpColor2.copy(baseRoadColor).lerp(grooveRoadColor, wearB * 0.72);
           tmpColor2.offsetHSL(0, 0, noise * 0.7);
-
-          // Faint start grid box markings slightly ahead of finish line
-          if (i >= 4 && i <= 7 && (a0.tarmacLane === 1 || a0.tarmacLane === 2) && i % 2 === 0) {
-            tmpColor.lerp(asphaltLight, 0.35);
-          }
 
           pushQuadDoubleColor(roadPos, roadCol, p00, p01, p10, p11, tmpColor, tmpColor2);
         }
       } else if (a0.kind === 'lineL' || a0.kind === 'lineR') {
-        pushQuadNonIndexed(roadPos, roadCol, p00, p01, p10, p11, whitePaint);
+        if (isGravel) {
+          tmpColor.copy(gravelBase).lerp(groundBase, 0.35);
+          pushQuadNonIndexed(roadPos, roadCol, p00, p01, p10, p11, tmpColor);
+        } else {
+          pushQuadNonIndexed(roadPos, roadCol, p00, p01, p10, p11, whitePaint);
+        }
       } else if (a0.kind === 'kerbL') {
         if (s0.kerbLeft) {
           tmpColor.copy(i % 2 === 0 ? kerbRed : kerbWhite);
@@ -361,7 +348,6 @@ export function buildTrackBundle(schema: ITrackSplineSchema): IBuiltTrackBundle 
         }
         pushQuadNonIndexed(roadPos, roadCol, p00, p01, p10, p11, tmpColor);
       } else {
-        // Grass / sandy runoff shoulder with sunlit tonal variation
         tmpColor.copy(groundBase);
         tmpColor.offsetHSL((prng.next() - 0.5) * 0.02, (prng.next() - 0.5) * 0.04, noise * 1.4);
         tmpColor2.copy(groundBase);
@@ -395,7 +381,50 @@ export function buildTrackBundle(schema: ITrackSplineSchema): IBuiltTrackBundle 
   root.add(roadMesh);
 
   // =========================================================================
-  // 4. LOW-POLY SAFETY BARRIERS (Armco Guardrail Ribbon + Accent Strips)
+  // 2. PAINTED STANDING START GRID BOXES (Aligned 1:1 with startGrid[0..3])
+  // =========================================================================
+  const gridPaintMat = trackDisposable(
+    new THREE.MeshBasicMaterial({
+      color: '#F1F5F9',
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+    })
+  );
+  const gridFrontBarGeo = trackDisposable(new THREE.PlaneGeometry(2.4, 0.22));
+  gridFrontBarGeo.rotateX(-Math.PI / 2);
+  const gridSideBarGeo = trackDisposable(new THREE.PlaneGeometry(0.16, 1.35));
+  gridSideBarGeo.rotateX(-Math.PI / 2);
+
+  for (const slot of collisionHandle.startGrid) {
+    const s = spline.sampleAtProgress(slot.splineProgress);
+    const boxGroup = new THREE.Group();
+    const basis = new THREE.Matrix4().makeBasis(
+      new THREE.Vector3(-s.right.x, -s.right.y, -s.right.z),
+      new THREE.Vector3(s.normal.x, s.normal.y, s.normal.z),
+      new THREE.Vector3(s.tangent.x, s.tangent.y, s.tangent.z)
+    );
+    const baseP = evalSurfacePoint(s, slot.lateralOffsetM, 0.032);
+    boxGroup.position.set(baseP.x, baseP.y, baseP.z);
+    boxGroup.quaternion.setFromRotationMatrix(basis);
+
+    const frontBar = new THREE.Mesh(gridFrontBarGeo, gridPaintMat);
+    frontBar.position.set(0, 0, 2.15);
+    boxGroup.add(frontBar);
+
+    const leftBar = new THREE.Mesh(gridSideBarGeo, gridPaintMat);
+    leftBar.position.set(1.12, 0, 1.48);
+    boxGroup.add(leftBar);
+
+    const rightBar = new THREE.Mesh(gridSideBarGeo, gridPaintMat);
+    rightBar.position.set(-1.12, 0, 1.48);
+    boxGroup.add(rightBar);
+
+    root.add(boxGroup);
+  }
+
+  // =========================================================================
+  // 3. LOW-POLY SAFETY BARRIERS (Armco Guardrail Ribbon + Support Posts)
   // =========================================================================
   const barrierPos: number[] = [];
   const barrierCol: number[] = [];
@@ -411,8 +440,8 @@ export function buildTrackBundle(schema: ITrackSplineSchema): IBuiltTrackBundle 
     const iNext = (i + 1) % n;
     const s0 = samples[i];
     const s1 = samples[iNext];
-    const outer0 = s0.widthM * 0.5 + KERB_WIDTH_M + RUNOFF_WIDTH_M;
-    const outer1 = s1.widthM * 0.5 + KERB_WIDTH_M + RUNOFF_WIDTH_M;
+    const outer0 = s0.widthM * 0.5 + TRACK_KERB_WIDTH_M + TRACK_RUNOFF_WIDTH_M;
+    const outer1 = s1.widthM * 0.5 + TRACK_KERB_WIDTH_M + TRACK_RUNOFF_WIDTH_M;
 
     const highCurve = s0.curvature > 0.011;
     const stripeCol = highCurve
@@ -423,7 +452,6 @@ export function buildTrackBundle(schema: ITrackSplineSchema): IBuiltTrackBundle 
       ? railShadow
       : railSteel;
 
-    // Build both Left (-1) and Right (+1) 3D boxed guardrail strips
     for (const side of [-1, 1] as const) {
       const innerLat0 = side * outer0;
       const outerLat0 = side * (outer0 + railThick);
@@ -441,18 +469,12 @@ export function buildTrackBundle(schema: ITrackSplineSchema): IBuiltTrackBundle 
       const o1b = evalSurfacePoint(s1, outerLat1, railBotH);
 
       if (side === -1) {
-        // Inner face (+right)
         pushQuadNonIndexed(barrierPos, barrierCol, i0t, i0b, i1t, i1b, stripeCol);
-        // Top cap (+normal)
         pushQuadNonIndexed(barrierPos, barrierCol, o0t, i0t, o1t, i1t, railSteel);
-        // Outer face (-right)
         pushQuadNonIndexed(barrierPos, barrierCol, o0b, o0t, o1b, o1t, railShadow);
       } else {
-        // Inner face (-right)
         pushQuadNonIndexed(barrierPos, barrierCol, i0b, i0t, i1b, i1t, stripeCol);
-        // Top cap (+normal)
         pushQuadNonIndexed(barrierPos, barrierCol, i0t, o0t, i1t, o1t, railSteel);
-        // Outer face (+right)
         pushQuadNonIndexed(barrierPos, barrierCol, o0t, o0b, o1t, o1b, railShadow);
       }
     }
@@ -477,9 +499,9 @@ export function buildTrackBundle(schema: ITrackSplineSchema): IBuiltTrackBundle 
   barrierMesh.name = 'track_barriers';
   root.add(barrierMesh);
 
-  // Instanced guardrail steel support posts every 4 samples
-  const postStep = 4;
-  const postCount = Math.floor(n / postStep) * 2;
+  // Instanced guardrail steel support posts every ~10 m
+  const postStep = Math.max(4, Math.round(n / 140));
+  const postCount = Math.ceil(n / postStep) * 2;
   const postGeo = trackDisposable(new THREE.BoxGeometry(0.12, 0.95, 0.12));
   const postMat = trackDisposable(
     new THREE.MeshStandardMaterial({
@@ -495,7 +517,7 @@ export function buildTrackBundle(schema: ITrackSplineSchema): IBuiltTrackBundle 
   let pCursor = 0;
   for (let i = 0; i < n; i += postStep) {
     const s = samples[i];
-    const outerLat = s.widthM * 0.5 + KERB_WIDTH_M + RUNOFF_WIDTH_M + railThick * 0.6;
+    const outerLat = s.widthM * 0.5 + TRACK_KERB_WIDTH_M + TRACK_RUNOFF_WIDTH_M + railThick * 0.6;
     for (const side of [-1, 1] as const) {
       if (pCursor >= postCount) break;
       const p = evalSurfacePoint(s, side * outerLat, 0.36);
@@ -506,35 +528,25 @@ export function buildTrackBundle(schema: ITrackSplineSchema): IBuiltTrackBundle 
       postInstanced.setMatrixAt(pCursor++, dummy.matrix);
     }
   }
+  postInstanced.count = pCursor;
   postInstanced.instanceMatrix.needsUpdate = true;
   root.add(postInstanced);
 
   // =========================================================================
-  // 5. SCULPTED LOW-POLY TERRAIN APRON + SURROUNDING VALLEY & HILLS
+  // 4. SCULPTED TERRAIN APRON WITH STRICT ROAD + RUNOFF CLEARANCE CORRIDOR
   // =========================================================================
-  // Compute bounding box of track samples
-  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity, minY = Infinity;
-  for (let i = 0; i < n; i++) {
-    const p = samples[i].position;
-    if (p.x < minX) minX = p.x;
-    if (p.x > maxX) maxX = p.x;
-    if (p.z < minZ) minZ = p.z;
-    if (p.z > maxZ) maxZ = p.z;
-    if (p.y < minY) minY = p.y;
-  }
+  const { min: bMin, max: bMax } = collisionHandle.bounds;
+  const centerX = (bMin.x + bMax.x) * 0.5;
+  const centerZ = (bMin.z + bMax.z) * 0.5;
+  const minY = bMin.y;
+  const span = Math.max(bMax.x - bMin.x, bMax.z - bMin.z) + 520;
+  const gridSegs = span > 1400 ? 128 : 96;
+  const cellSize = span / gridSegs;
+  // Guarantee every vertex of any terrain cell touching road or outer runoff is strictly depressed
+  const corridorExtraM = cellSize * 1.35 + 3.0;
 
-  const centerX = (minX + maxX) * 0.5;
-  const centerZ = (minZ + maxZ) * 0.5;
-  const span = Math.max(maxX - minX, maxZ - minZ) + 520;
-  const gridSegs = 64;
   const terrainGeo = trackDisposable(new THREE.PlaneGeometry(span, span, gridSegs, gridSegs));
   terrainGeo.rotateX(-Math.PI / 2);
-
-  // Decimated spline lookup for fast clearance clamping
-  const decimated: ISplineSample[] = [];
-  for (let i = 0; i < n; i += 4) {
-    decimated.push(samples[i]);
-  }
 
   const tPos = terrainGeo.attributes.position as THREE.BufferAttribute;
   const tColors = new Float32Array(tPos.count * 3);
@@ -543,51 +555,42 @@ export function buildTrackBundle(schema: ITrackSplineSchema): IBuiltTrackBundle 
   const warmSunTint = new THREE.Color(schema.groundColorHex).lerp(new THREE.Color('#D9B978'), 0.24);
   const isMountain = schema.id.includes('mountain');
   const isDesert = schema.id.includes('oval');
-  const hillAmp = isMountain ? 34 : isDesert ? 16 : 22;
+  const hillAmp = isMountain ? 34 : isDesert ? 16 : 20;
 
-  for (let v = 0; v < tPos.count; v++) {
-    const wx = tPos.getX(v) + centerX;
-    const wz = tPos.getZ(v) + centerZ;
+  const evalTerrainHeight = (wx: number, wz: number): { y: number; hillWave: number } => {
+    const q = spatialIndex.queryClearance(wx, wz, corridorExtraM);
+    const nearestSample = q.nearestSample;
+    const nearestDist = q.nearestDist;
+    const outerLat = nearestSample.widthM * 0.5 + TRACK_KERB_WIDTH_M + TRACK_RUNOFF_WIDTH_M;
+    const corridorRadius = outerLat + corridorExtraM;
 
-    // Nearest spline sample in XZ
-    let nearestDistSq = Infinity;
-    let nearestSample = decimated[0];
-    for (let j = 0; j < decimated.length; j++) {
-      const sp = decimated[j];
-      const dx = wx - sp.position.x;
-      const dz = wz - sp.position.z;
-      const d2 = dx * dx + dz * dz;
-      if (d2 < nearestDistSq) {
-        nearestDistSq = d2;
-        nearestSample = sp;
-      }
-    }
-
-    const nearestDist = Math.sqrt(nearestDistSq);
-    const roadClearance = nearestSample.widthM * 0.5 + KERB_WIDTH_M + RUNOFF_WIDTH_M + 4.5;
-
-    // Multi-frequency deterministic rolling hills (pure trig, zero GC)
     const hillWave =
       Math.sin(wx * 0.011 + 0.7) * Math.cos(wz * 0.013 - 0.4) * 0.55 +
       Math.sin((wx + wz) * 0.021 + 1.9) * 0.3 +
       Math.cos((wx - wz) * 0.037) * 0.15;
-    const outerRim = Math.max(0, (nearestDist - 120) / 170);
+
+    if (q.inCorridor) {
+      return { y: q.minCorridorRoadY - 0.55, hillWave };
+    }
+
+    const outerRim = Math.max(0, (nearestDist - 125) / 170);
     const rawHillY =
       minY - 2.4 + (hillWave * 0.5 + 0.5) * hillAmp + outerRim * outerRim * (isMountain ? 48 : 26);
 
-    // Smooth blend from road embankment height to distant rolling hills
-    const blend = Math.max(0, Math.min(1, (nearestDist - roadClearance) / 48));
+    const blend = Math.max(0, Math.min(1, (nearestDist - corridorRadius) / 56));
     const smoothBlend = blend * blend * (3 - 2 * blend);
     const roadBedY = nearestSample.position.y - 0.55;
     const finalY = roadBedY * (1 - smoothBlend) + rawHillY * smoothBlend;
+    return { y: finalY, hillWave };
+  };
 
-    // Strictly guarantee terrain never pokes through road/runoff
-    const clampedY =
-      nearestDist < roadClearance + 3 ? Math.min(finalY, nearestSample.position.y - 0.45) : finalY;
+  for (let v = 0; v < tPos.count; v++) {
+    const wx = tPos.getX(v) + centerX;
+    const wz = tPos.getZ(v) + centerZ;
+    const { y: clampedY, hillWave } = evalTerrainHeight(wx, wz);
 
     tPos.setXYZ(v, wx, clampedY, wz);
 
-    // Vertex color based on height & slope warmth
     const hNorm = Math.max(0, Math.min(1, (clampedY - (minY - 2)) / (hillAmp + 18)));
     if (hNorm > 0.62) {
       tmpColor.copy(groundBase).lerp(hillHighCol, (hNorm - 0.62) / 0.38);
@@ -618,7 +621,7 @@ export function buildTrackBundle(schema: ITrackSplineSchema): IBuiltTrackBundle 
   terrainMesh.name = 'track_terrain_apron';
   root.add(terrainMesh);
 
-  // Seamless embankment skirt connecting outer runoff down into terrain
+  // Seamless embankment skirt connecting outer runoff smoothly down into depressed terrain corridor
   const skirtPos: number[] = [];
   const skirtCol: number[] = [];
   const skirtColOuter = new THREE.Color(schema.groundColorHex).multiplyScalar(0.88);
@@ -626,14 +629,14 @@ export function buildTrackBundle(schema: ITrackSplineSchema): IBuiltTrackBundle 
     const iNext = (i + 1) % n;
     const s0 = samples[i];
     const s1 = samples[iNext];
-    const outer0 = s0.widthM * 0.5 + KERB_WIDTH_M + RUNOFF_WIDTH_M;
-    const outer1 = s1.widthM * 0.5 + KERB_WIDTH_M + RUNOFF_WIDTH_M;
+    const outer0 = s0.widthM * 0.5 + TRACK_KERB_WIDTH_M + TRACK_RUNOFF_WIDTH_M;
+    const outer1 = s1.widthM * 0.5 + TRACK_KERB_WIDTH_M + TRACK_RUNOFF_WIDTH_M;
 
     for (const side of [-1, 1] as const) {
       const a0 = evalSurfacePoint(s0, side * outer0, -0.08);
-      const b0 = evalSurfacePoint(s0, side * (outer0 + 14), -4.2);
+      const b0 = evalSurfacePoint(s0, side * (outer0 + 12), -3.2);
       const a1 = evalSurfacePoint(s1, side * outer1, -0.08);
-      const b1 = evalSurfacePoint(s1, side * (outer1 + 14), -4.2);
+      const b1 = evalSurfacePoint(s1, side * (outer1 + 12), -3.2);
 
       if (side === -1) {
         pushQuadDoubleColor(skirtPos, skirtCol, b0, a0, b1, a1, skirtColOuter, groundBase);
@@ -651,7 +654,7 @@ export function buildTrackBundle(schema: ITrackSplineSchema): IBuiltTrackBundle 
   root.add(skirtMesh);
 
   // =========================================================================
-  // 6. START/FINISH GANTRY ARCH + SECTOR TIMING ARCHES
+  // 5. START/FINISH & SECTOR TIMING GANTRIES (Pillars strictly OUTSIDE barriers)
   // =========================================================================
   const buildGantry = (
     sample: ISplineSample,
@@ -659,10 +662,11 @@ export function buildTrackBundle(schema: ITrackSplineSchema): IBuiltTrackBundle 
     accentHex: string
   ): THREE.Group => {
     const g = new THREE.Group();
-    const spanW = sample.widthM + KERB_WIDTH_M * 2 + 2.4;
-    const height = isStartFinish ? 6.8 : 5.6;
+    const outerLat = sample.widthM * 0.5 + TRACK_KERB_WIDTH_M + TRACK_RUNOFF_WIDTH_M;
+    // Place pillars cleanly outside the containment wall so runoff & passing zones are 100% unobstructed
+    const spanW = (outerLat + railThick + 0.65) * 2;
+    const height = isStartFinish ? 7.2 : 6.0;
 
-    // Orient group to track frame: +X = left (-right), +Y = normal, +Z = tangent
     const basis = new THREE.Matrix4().makeBasis(
       new THREE.Vector3(-sample.right.x, -sample.right.y, -sample.right.z),
       new THREE.Vector3(sample.normal.x, sample.normal.y, sample.normal.z),
@@ -700,22 +704,23 @@ export function buildTrackBundle(schema: ITrackSplineSchema): IBuiltTrackBundle 
     rightPillar.castShadow = true;
     g.add(rightPillar);
 
-    const beamGeo = trackDisposable(new THREE.BoxGeometry(spanW + 1.0, isStartFinish ? 1.35 : 0.75, 0.9));
+    const beamGeo = trackDisposable(
+      new THREE.BoxGeometry(spanW + 1.0, isStartFinish ? 1.35 : 0.75, 0.9)
+    );
     const beam = new THREE.Mesh(beamGeo, frameMat);
     beam.position.set(0, height - 0.3, 0);
     beam.castShadow = true;
     g.add(beam);
 
-    // Accent neon telemetry bar under beam
     const stripGeo = trackDisposable(new THREE.BoxGeometry(spanW - 0.8, 0.14, 0.96));
     const strip = new THREE.Mesh(stripGeo, accentMat);
     strip.position.set(0, height - (isStartFinish ? 0.95 : 0.68), 0);
     g.add(strip);
 
     if (isStartFinish) {
-      // Crisp checkered banner facets along front & back of gantry beam
       const tiles = 16;
-      const tileW = (spanW - 1.2) / tiles;
+      const bannerW = Math.min(spanW - 2.0, sample.widthM + 4.0);
+      const tileW = bannerW / tiles;
       const tileGeo = trackDisposable(new THREE.BoxGeometry(tileW * 0.96, 0.42, 0.96));
       const whiteMat = trackDisposable(
         new THREE.MeshStandardMaterial({ color: '#F8FAFC', roughness: 0.5 })
@@ -724,7 +729,7 @@ export function buildTrackBundle(schema: ITrackSplineSchema): IBuiltTrackBundle 
         new THREE.MeshStandardMaterial({ color: '#0F172A', roughness: 0.5 })
       );
       for (let t = 0; t < tiles; t++) {
-        const x = -((spanW - 1.2) * 0.5) + tileW * (t + 0.5);
+        const x = -(bannerW * 0.5) + tileW * (t + 0.5);
         for (let row = 0; row < 2; row++) {
           const tile = new THREE.Mesh(tileGeo, (t + row) % 2 === 0 ? whiteMat : darkMat);
           tile.position.set(x, height - 0.1 + (row === 0 ? 0.22 : -0.22), 0);
@@ -732,7 +737,6 @@ export function buildTrackBundle(schema: ITrackSplineSchema): IBuiltTrackBundle 
         }
       }
 
-      // 5 Start Light Pods suspended below gantry
       const podGeo = trackDisposable(new THREE.BoxGeometry(0.45, 0.72, 0.3));
       const lampGeo = trackDisposable(new THREE.SphereGeometry(0.11, 8, 6));
       const greenLampMat = trackDisposable(
@@ -760,69 +764,114 @@ export function buildTrackBundle(schema: ITrackSplineSchema): IBuiltTrackBundle 
   root.add(buildGantry(spline.sampleAtProgress(schema.sectorFractions[1]), false, '#00F0FF'));
 
   // =========================================================================
+  // 6. BRAKE DISTANCE MARKER BOARDS (Outside barriers approaching heavy bends)
+  // =========================================================================
+  const brakeBoardPositions: Array<{ sample: ISplineSample; side: -1 | 1; distM: 100 | 50 }> = [];
+  let lastBrakeCornerDist = -200;
+  for (let i = 0; i < n; i++) {
+    const s = samples[i];
+    if (s.curvature < 0.022) continue;
+    // Check that we're entering a corner from a straighter approach
+    const prevS = spline.sampleAtProgress(spline.progressAtDistance(s.distanceM - 45));
+    if (prevS.curvature > 0.013) continue;
+    if (s.distanceM - lastBrakeCornerDist < 180) continue;
+    lastBrakeCornerDist = s.distanceM;
+
+    // Place marker boards on the OUTSIDE of the upcoming turn, strictly outside the barrier
+    const outsideSide: -1 | 1 = s.signedCurvature >= 0 ? -1 : 1;
+    for (const distM of [100, 50] as const) {
+      const markerSample = spline.sampleAtProgress(spline.progressAtDistance(s.distanceM - distM));
+      brakeBoardPositions.push({ sample: markerSample, side: outsideSide, distM });
+    }
+  }
+
+  if (brakeBoardPositions.length > 0) {
+    const boardGeo = trackDisposable(new THREE.BoxGeometry(1.15, 0.72, 0.1));
+    const boardPostGeo = trackDisposable(new THREE.BoxGeometry(0.1, 1.4, 0.1));
+    const boardPostMat = trackDisposable(
+      new THREE.MeshStandardMaterial({ color: '#334155', roughness: 0.7 })
+    );
+    const board100Mat = trackDisposable(
+      new THREE.MeshStandardMaterial({ color: '#F8FAFC', roughness: 0.45 })
+    );
+    const board50Mat = trackDisposable(
+      new THREE.MeshStandardMaterial({ color: '#F59E0B', roughness: 0.45 })
+    );
+    const stripeMat = trackDisposable(
+      new THREE.MeshStandardMaterial({ color: '#0F172A', roughness: 0.5 })
+    );
+    const stripeGeo = trackDisposable(new THREE.BoxGeometry(0.95, 0.14, 0.12));
+
+    for (const m of brakeBoardPositions) {
+      const s = m.sample;
+      const outerLat = s.widthM * 0.5 + TRACK_KERB_WIDTH_M + TRACK_RUNOFF_WIDTH_M + railThick + 1.1;
+      const p = evalSurfacePoint(s, m.side * outerLat, 0);
+      const boardGroup = new THREE.Group();
+      const basis = new THREE.Matrix4().makeBasis(
+        new THREE.Vector3(-s.right.x, -s.right.y, -s.right.z),
+        new THREE.Vector3(s.normal.x, s.normal.y, s.normal.z),
+        new THREE.Vector3(s.tangent.x, s.tangent.y, s.tangent.z)
+      );
+      boardGroup.position.set(p.x, p.y, p.z);
+      boardGroup.quaternion.setFromRotationMatrix(basis);
+
+      const post = new THREE.Mesh(boardPostGeo, boardPostMat);
+      post.position.set(0, 0.7, 0);
+      boardGroup.add(post);
+
+      const board = new THREE.Mesh(boardGeo, m.distM === 100 ? board100Mat : board50Mat);
+      board.position.set(0, 1.45, 0);
+      board.castShadow = true;
+      boardGroup.add(board);
+
+      const stripes = m.distM === 100 ? 2 : 1;
+      for (let st = 0; st < stripes; st++) {
+        const bar = new THREE.Mesh(stripeGeo, stripeMat);
+        bar.position.set(0, 1.45 + (stripes === 2 ? (st === 0 ? 0.14 : -0.14) : 0), 0);
+        boardGroup.add(bar);
+      }
+
+      root.add(boardGroup);
+    }
+  }
+
+  // =========================================================================
   // 7. GPU INSTANCED LOW-POLY PROPS (Trees, Boulders, Apex Bollards)
   // =========================================================================
   const isSafeFromRoad = (x: number, z: number, extraMargin: number): boolean => {
-    for (let j = 0; j < decimated.length; j++) {
-      const sp = decimated[j];
-      const dx = x - sp.position.x;
-      const dz = z - sp.position.z;
-      const minClear = sp.widthM * 0.5 + KERB_WIDTH_M + RUNOFF_WIDTH_M + extraMargin;
-      if (dx * dx + dz * dz < minClear * minClear) return false;
-    }
-    return true;
+    const q = spatialIndex.queryClearance(x, z, extraMargin);
+    const minClear =
+      q.nearestSample.widthM * 0.5 +
+      TRACK_KERB_WIDTH_M +
+      TRACK_RUNOFF_WIDTH_M +
+      extraMargin +
+      (q.nearestSample.inPassingZone ? 4.0 : 0);
+    return q.nearestDist >= minClear;
   };
 
-  // Sample terrain elevation approximation for placed props
-  const estimatePropY = (x: number, z: number): number => {
-    let bestD2 = Infinity;
-    let bestS = decimated[0];
-    for (let j = 0; j < decimated.length; j++) {
-      const sp = decimated[j];
-      const dx = x - sp.position.x;
-      const dz = z - sp.position.z;
-      const d2 = dx * dx + dz * dz;
-      if (d2 < bestD2) {
-        bestD2 = d2;
-        bestS = sp;
-      }
-    }
-    const dist = Math.sqrt(bestD2);
-    const roadClearance = bestS.widthM * 0.5 + KERB_WIDTH_M + RUNOFF_WIDTH_M + 4.5;
-    const hillWave =
-      Math.sin(x * 0.011 + 0.7) * Math.cos(z * 0.013 - 0.4) * 0.55 +
-      Math.sin((x + z) * 0.021 + 1.9) * 0.3 +
-      Math.cos((x - z) * 0.037) * 0.15;
-    const outerRim = Math.max(0, (dist - 120) / 170);
-    const rawHillY =
-      minY - 2.4 + (hillWave * 0.5 + 0.5) * hillAmp + outerRim * outerRim * (isMountain ? 48 : 26);
-    const blend = Math.max(0, Math.min(1, (dist - roadClearance) / 48));
-    const smoothBlend = blend * blend * (3 - 2 * blend);
-    return (bestS.position.y - 0.55) * (1 - smoothBlend) + rawHillY * smoothBlend;
-  };
-
-  // 7A. Low-Poly Trees (Instanced trunks + Instanced 2-tier faceted foliage)
-  const targetTrees = Math.floor(240 * Math.max(0.1, schema.treeDensity));
+  // 7A. Low-Poly Trees
+  const targetTrees =
+    schema.treeDensity <= 0 ? 0 : Math.floor(240 * Math.max(0.05, schema.treeDensity));
   const treeMatrices: THREE.Matrix4[] = [];
   const foliageMatrices: THREE.Matrix4[] = [];
   const foliageColors: THREE.Color[] = [];
 
   const treePalette = isMountain
-    ? ['#1E4D2B', '#2D6A4F', '#40916C', '#E07A5F', '#D97706'] // Alpine cedar + autumn accents
+    ? ['#1E4D2B', '#2D6A4F', '#40916C', '#E07A5F', '#D97706']
     : isDesert
     ? ['#6B705C', '#849B63', '#A3A87A']
-    : ['#2B580C', '#3E7C17', '#5C9438', '#4F772D']; // Sunlit Tuscan cypress / pine
+    : ['#2B580C', '#3E7C17', '#5C9438', '#4F772D'];
 
   for (let attempt = 0; attempt < targetTrees * 4 && treeMatrices.length < targetTrees; attempt++) {
     const s = samples[prng.int(0, n - 1)];
     const side = prng.next() > 0.5 ? 1 : -1;
     const lateralDist =
-      s.widthM * 0.5 + KERB_WIDTH_M + RUNOFF_WIDTH_M + prng.range(5.5, 68.0);
+      s.widthM * 0.5 + TRACK_KERB_WIDTH_M + TRACK_RUNOFF_WIDTH_M + prng.range(7.0, 68.0);
     const px = s.position.x + s.right.x * side * lateralDist + prng.range(-4, 4);
     const pz = s.position.z + s.right.z * side * lateralDist + prng.range(-4, 4);
-    if (!isSafeFromRoad(px, pz, 3.2)) continue;
+    if (!isSafeFromRoad(px, pz, 4.5)) continue;
 
-    const py = estimatePropY(px, pz);
+    const py = evalTerrainHeight(px, pz).y;
     const scale = prng.range(0.75, 1.85);
     const rotY = prng.range(0, Math.PI * 2);
 
@@ -834,7 +883,11 @@ export function buildTrackBundle(schema: ITrackSplineSchema): IBuiltTrackBundle 
 
     dummy.position.set(px, py + 3.4 * scale, pz);
     dummy.rotation.set(0, rotY, 0);
-    dummy.scale.set(scale * (isDesert ? 0.8 : 1.0), scale * (isMountain ? 1.3 : 1.15), scale * (isDesert ? 0.8 : 1.0));
+    dummy.scale.set(
+      scale * (isDesert ? 0.8 : 1.0),
+      scale * (isMountain ? 1.3 : 1.15),
+      scale * (isDesert ? 0.8 : 1.0)
+    );
     dummy.updateMatrix();
     foliageMatrices.push(dummy.matrix.clone());
 
@@ -874,7 +927,8 @@ export function buildTrackBundle(schema: ITrackSplineSchema): IBuiltTrackBundle 
   }
 
   // 7B. Low-Poly Boulders / Rocks
-  const targetRocks = Math.floor(140 * Math.max(0.15, schema.rockDensity));
+  const targetRocks =
+    schema.rockDensity <= 0 ? 0 : Math.floor(140 * Math.max(0.05, schema.rockDensity));
   const rockMatrices: THREE.Matrix4[] = [];
   const rockColors: THREE.Color[] = [];
   const baseRockHex = isDesert ? '#B08968' : isMountain ? '#64748B' : '#78716C';
@@ -883,12 +937,12 @@ export function buildTrackBundle(schema: ITrackSplineSchema): IBuiltTrackBundle 
     const s = samples[prng.int(0, n - 1)];
     const side = prng.next() > 0.5 ? 1 : -1;
     const lateralDist =
-      s.widthM * 0.5 + KERB_WIDTH_M + RUNOFF_WIDTH_M + prng.range(4.2, 56.0);
+      s.widthM * 0.5 + TRACK_KERB_WIDTH_M + TRACK_RUNOFF_WIDTH_M + prng.range(5.5, 56.0);
     const px = s.position.x + s.right.x * side * lateralDist + prng.range(-3, 3);
     const pz = s.position.z + s.right.z * side * lateralDist + prng.range(-3, 3);
-    if (!isSafeFromRoad(px, pz, 2.6)) continue;
+    if (!isSafeFromRoad(px, pz, 3.6)) continue;
 
-    const py = estimatePropY(px, pz);
+    const py = evalTerrainHeight(px, pz).y;
     const sx = prng.range(0.8, 3.4);
     const sy = prng.range(0.6, 2.4);
     const sz = prng.range(0.8, 3.2);
@@ -921,14 +975,16 @@ export function buildTrackBundle(schema: ITrackSplineSchema): IBuiltTrackBundle 
     root.add(rockMesh);
   }
 
-  // 7C. Apex Bollards along tight kerbs (high-visibility orange-amber cylinders)
+  // 7C. Apex Bollards along tight kerbs — strictly EXCLUDED from passing zones & drift zones
   const bollardMatrices: THREE.Matrix4[] = [];
-  for (let i = 0; i < n; i += 6) {
+  const bollardStep = Math.max(4, Math.round(n / 90));
+  for (let i = 0; i < n; i += bollardStep) {
     const s = samples[i];
-    if (s.curvature < 0.008) continue;
+    if (s.inPassingZone || s.inDriftZone) continue;
+    if (s.curvature < 0.012) continue;
     const hw = s.widthM * 0.5;
     if (s.kerbLeft && s.signedCurvature < 0) {
-      const p = evalSurfacePoint(s, -(hw + KERB_WIDTH_M + 0.55), 0.38);
+      const p = evalSurfacePoint(s, -(hw + TRACK_KERB_WIDTH_M + 0.6), 0.38);
       dummy.position.set(p.x, p.y, p.z);
       dummy.rotation.set(0, 0, 0);
       dummy.scale.set(1, 1, 1);
@@ -936,7 +992,7 @@ export function buildTrackBundle(schema: ITrackSplineSchema): IBuiltTrackBundle 
       bollardMatrices.push(dummy.matrix.clone());
     }
     if (s.kerbRight && s.signedCurvature > 0) {
-      const p = evalSurfacePoint(s, hw + KERB_WIDTH_M + 0.55, 0.38);
+      const p = evalSurfacePoint(s, hw + TRACK_KERB_WIDTH_M + 0.6, 0.38);
       dummy.position.set(p.x, p.y, p.z);
       dummy.rotation.set(0, 0, 0);
       dummy.scale.set(1, 1, 1);
@@ -965,26 +1021,44 @@ export function buildTrackBundle(schema: ITrackSplineSchema): IBuiltTrackBundle 
     root.add(bollardMesh);
   }
 
-  const spawn = spline.getSpawnTransform();
-  const geometryData: ITrackGeometryData = {
+  const dispose = () => {
+    for (const item of disposables) {
+      item.dispose();
+    }
+  };
+
+  const renderHandle: ITrackRenderHandle = {
+    handleId: collisionHandle.handleId,
+    trackId: collisionHandle.trackId,
+    trackVersion: collisionHandle.trackVersion,
+    geometryHash: collisionHandle.geometryHash,
+    sceneObject: root,
+    dispose,
+  };
+
+  // Keep legacy Engine.ts spawnPosition just ahead of t=0 so legacy splineProgress=0.005
+  // timing doesn't wrap to t=0.998 and misfire S1; new Engine.ts uses collisionHandle.startGrid[0]
+  // (-2.5 m nose-at-S/F) together with LapSectorTimer.
+  const legacySpawn = spline.getLegacySpawnTransform();
+  const geometryData: ITrackGeometryDataV2 = {
     trackSchema: schema,
     spline,
-    roadVertices,
-    roadIndices,
-    wallVertices,
-    wallIndices,
-    triangleSurfaces,
-    spawnPosition: spawn.position,
-    spawnRotation: spawn.rotation,
+    roadVertices: collisionHandle.roadVertices,
+    roadIndices: collisionHandle.roadIndices,
+    wallVertices: collisionHandle.wallVertices,
+    wallIndices: collisionHandle.wallIndices,
+    triangleSurfaces: collisionHandle.triangleSurfaces,
+    spawnPosition: legacySpawn.position,
+    spawnRotation: legacySpawn.rotation,
+    collisionHandle,
+    renderHandle,
   };
 
   return {
     group: root,
     geometryData,
-    dispose: () => {
-      for (const item of disposables) {
-        item.dispose();
-      }
-    },
+    collisionHandle,
+    renderHandle,
+    dispose,
   };
 }

@@ -1,9 +1,20 @@
 import type { IEngineContext, IModulusPlugin, ITrackSplineSchema } from '../../core/types';
 import { buildTrackBundle, type IBuiltTrackBundle } from './buildTrackMesh';
 
+export { buildTrackCollision, type IBuiltTrackCollision } from './buildTrackCollision';
+export {
+  buildTrackPreviewData,
+  validateTrackGeometry,
+  type ITrackElevationPoint,
+  type ITrackGeometryCheckResult,
+  type ITrackPreviewData,
+  type ITrackPreviewPoint2D,
+} from './trackPreview';
+export { buildTrackBundle, type IBuiltTrackBundle, type ITrackGeometryDataV2 } from './buildTrackMesh';
+
 class TrackGeneratorController implements IModulusPlugin {
   public readonly id = 'track-generator';
-  public readonly version = '1.0.0';
+  public readonly version = '2.0.0';
   public readonly priority = 10;
 
   private ctx: IEngineContext | null = null;
@@ -40,7 +51,7 @@ class TrackGeneratorController implements IModulusPlugin {
     this.ctx.scene.add(bundle.group);
     this.activeBundle = bundle;
 
-    // Broadcast collision trimesh, walls, surface lookup & spawn transform to physics + engine
+    // Broadcast collision trimesh, walls, surface lookup, handles & spawn transform to physics + engine
     this.ctx.setTrackGeometry(bundle.geometryData);
   }
 
