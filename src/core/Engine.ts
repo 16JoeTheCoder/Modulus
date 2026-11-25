@@ -15,6 +15,7 @@ import {
   type IVehicleStateSnapshot,
   type IWheelStateSnapshot,
   type LapInvalidationReason,
+  type SessionMode,
 } from '../contracts/simulation';
 import { EventBus } from './EventBus';
 import { compileVehicleBuild } from './math/vehicleCompiler';
@@ -190,8 +191,12 @@ export class ModulusEngine implements IEngineContext {
   public canvas: HTMLCanvasElement | null = null;
 
   private visualMode: VisualMode = 'lab';
+  private sessionMode: SessionMode = 'practice';
   private cameraPreset: CameraPreset = 'cockpit';
   private simulationPaused = false;
+  private fixedStepListeners = new Set<
+    (tick: number, inputFrame: IFixedStepInputFrame, snapshot: IVehicleStateSnapshot) => void
+  >();
   private assists: IDrivingAssistConfig = {
     transmissionMode: 'auto',
     assistPreset: 'beginner',
@@ -403,6 +408,17 @@ export class ModulusEngine implements IEngineContext {
     this.captureFixedInputFrame();
     this.updateLapAndSectorTiming(dt);
 
+    if (this.fixedStepListeners.size > 0) {
+      const snap = this.getVehicleSnapshot();
+      for (const listener of Array.from(this.fixedStepListeners)) {
+        try {
+          listener(this.simTick, this.fixedInputFrame, snap);
+        } catch (err) {
+          console.error('[ModulusEngine] Error in onFixedStep listener:', err);
+        }
+      }
+    }
+
     // Clear edge-triggered input flags after one physics step
     this.keyboardInput.gearUp = false;
     this.keyboardInput.gearDown = false;
@@ -601,7 +617,7 @@ export class ModulusEngine implements IEngineContext {
       (this.activeTrack as ITrackSplineSchema & { trackVersion?: string }).trackVersion
     );
     const geometryHash = geom.collisionHandle?.geometryHash ?? `${this.activeTrack.id}_${trackVersion}`;
-    const sessionMode = st.aiEnabled ? 'ai_race' : 'practice';
+    const sessionMode: SessionMode = st.aiEnabled ? 'ai_race' : this.sessionMode;
     const sectorNames =
       geom.collisionHandle?.sectors.map((s) => s.name) ?? ['Sector 1', 'Sector 2', 'Sector 3'];
 
@@ -862,7 +878,7 @@ export class ModulusEngine implements IEngineContext {
     if (geometry.collisionHandle) {
       this.lapTimer = new LapSectorTimer(geometry.collisionHandle, geometry.spline, {
         startTimingMode: 'standing_on_launch',
-        sessionMode: this.runtimeState.aiEnabled ? 'ai_race' : 'time_trial',
+        sessionMode: this.runtimeState.aiEnabled ? 'ai_race' : this.sessionMode,
         ruleset: {
           balanceVersionId: this.balanceConfig.version_id,
           assistPreset: this.assists.assistPreset,
@@ -888,6 +904,32 @@ export class ModulusEngine implements IEngineContext {
 
   public getFixedStepInputFrame(): IFixedStepInputFrame {
     return this.fixedInputFrame;
+  }
+
+  public onFixedStep(
+    listener: (
+      tick: number,
+      inputFrame: IFixedStepInputFrame,
+      snapshot: IVehicleStateSnapshot
+    ) => void
+  ): () => void {
+    this.fixedStepListeners.add(listener);
+    return () => {
+      this.fixedStepListeners.delete(listener);
+    };
+  }
+
+  public getSessionMode(): SessionMode {
+    return this.sessionMode;
+  }
+
+  public setSessionMode(mode: SessionMode): void {
+    if (this.sessionMode === mode) return;
+    this.sessionMode = mode;
+    if (!this.runtimeState.aiEnabled) {
+      this.lapTimer?.setSessionMode(mode);
+    }
+    this.events.emit('session:mode-changed', { mode });
   }
 
   public getVehicleCollisionHandle(vehicleId = 'v0'): IVehicleCollisionHandle {
@@ -1128,7 +1170,7 @@ export class ModulusEngine implements IEngineContext {
 
   public setAiEnabled(enabled: boolean): void {
     this.runtimeState.aiEnabled = enabled;
-    this.lapTimer?.setSessionMode(enabled ? 'ai_race' : 'time_trial');
+    this.lapTimer?.setSessionMode(enabled ? 'ai_race' : this.sessionMode);
     this.events.emit('ai:toggled', { enabled });
   }
 }

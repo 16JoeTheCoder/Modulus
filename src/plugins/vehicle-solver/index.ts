@@ -22,17 +22,29 @@ const WHEEL_SPIN_SUBSTEPS = 8;
 const SURFACE_GRIP: Record<SurfaceType, number> = {
   tarmac: 1.0,
   kerb: 0.88,
-  grass: 0.52,
-  gravel: 0.64,
-  dirt: 0.60,
+  grass: 0.50,
+  gravel: 0.66,
+  dirt: 0.62,
+};
+
+/**
+ * Loose surfaces (gravel/dirt/grass) have broader, lazier Pacejka slip curves so peak grip
+ * sits around 12-16 deg slip angle instead of snapping like cold tarmac.
+ */
+const SURFACE_PACEJKA_B_MULT: Record<SurfaceType, number> = {
+  tarmac: 1.0,
+  kerb: 0.92,
+  grass: 0.48,
+  gravel: 0.58,
+  dirt: 0.52,
 };
 
 const SURFACE_ROLLING_RESISTANCE: Record<SurfaceType, number> = {
   tarmac: 0.014,
   kerb: 0.022,
   grass: 0.068,
-  gravel: 0.082,
-  dirt: 0.088,
+  gravel: 0.070,
+  dirt: 0.078,
 };
 
 function clamp(v: number, min: number, max: number): number {
@@ -230,6 +242,10 @@ export class VehicleSolverPlugin implements IModulusPlugin {
     const absEnabled = !state.aiEnabled && state.assistPreset !== 'pro';
     const absSlipThreshold = state.assistPreset === 'beginner' ? -0.14 : -0.22;
 
+    // Downhill grade detection (+forwardWorld.y < 0 means nose pointed downhill).
+    // Steep downhill braking shifts weight off the rear axle; EBD proportioning prevents violent rear-lock snap-spins.
+    const downhillGrade = clamp(-state.forwardWorld.y, 0, 0.35);
+
     for (let i = 0; i < 4; i++) {
       const w = state.wheels[i];
       const isFront = i < 2;
@@ -246,11 +262,22 @@ export class VehicleSolverPlugin implements IModulusPlugin {
       }
       w.camberAngleRad = clamp(staticCamberRad + bumpCamberRad + casterCamberRad, -10 * DEG_TO_RAD, 5 * DEG_TO_RAD);
 
-      // Service brake + rear handbrake torque (with ABS modulation if active)
+      // Service brake + rear handbrake torque (with ABS + downhill/crest rear-load EBD)
       const baseAxleBrake = isFront
         ? vehicle.maxBrakeTorquePerAxleFrontNm * 0.5
         : vehicle.maxBrakeTorquePerAxleRearNm * 0.5;
       let serviceBrakeTorqueNm = baseAxleBrake * serviceBrakeInput * w.brakeFadeMultiplier;
+
+      // Dynamic rear brake proportioning (EBD) when rear axle unloads under steep downhill braking or crests
+      if (!isFront && serviceBrakeInput > 0.25 && handbrakeInput < 0.05) {
+        const rearLoadRatio = clamp(w.normalLoadN / Math.max(500, staticCornerLoads[i]), 0, 1.2);
+        const ebdScale = clamp(
+          0.55 + rearLoadRatio * 0.45 - downhillGrade * 0.55,
+          state.assistPreset === 'pro' ? 0.62 : 0.46,
+          1.0
+        );
+        serviceBrakeTorqueNm *= ebdScale;
+      }
 
       let absModulating = false;
       if (
@@ -260,7 +287,6 @@ export class VehicleSolverPlugin implements IModulusPlugin {
         state.speedMs > 2.2 &&
         w.slipRatio < absSlipThreshold
       ) {
-        // Progressive threshold ABS: eases brake pressure cleanly to hold ~12-16% optimal braking slip
         const overshoot = clamp((absSlipThreshold - w.slipRatio) / 0.25, 0, 1);
         serviceBrakeTorqueNm *= clamp(1 - overshoot * 0.72, 0.22, 1.0);
         absModulating = true;
@@ -268,7 +294,8 @@ export class VehicleSolverPlugin implements IModulusPlugin {
 
       let brakeTorqueNm = serviceBrakeTorqueNm;
       if (!isFront && handbrakeInput > 0.01) {
-        brakeTorqueNm += 3400 * handbrakeInput * w.brakeFadeMultiplier;
+        // Strong hydraulic handbrake locks rear wheels promptly for clean drift initiation
+        brakeTorqueNm += 4200 * handbrakeInput * w.brakeFadeMultiplier;
       }
       w.brakeTorqueNm = brakeTorqueNm;
 
@@ -342,10 +369,13 @@ export class VehicleSolverPlugin implements IModulusPlugin {
         pointWorld: suspPointWorld,
       });
 
+      // Scale geometric load transfer by grounded suspension load fraction so wheels cresting a hill
+      // genuinely unload smoothly instead of receiving phantom normal load while airborne/light.
+      const groundedLoadFrac = clamp(suspForceN / Math.max(500, staticCornerLoads[i]), 0, 1.35);
       const latSign = isLeft ? 1 : -1;
       const longSign = isFront ? -1 : 1;
       const normalLoadN = clamp(
-        suspForceN + latSign * geomLatTransferN + longSign * geomLongTransferN,
+        suspForceN + (latSign * geomLatTransferN + longSign * geomLongTransferN) * groundedLoadFrac,
         0,
         maxSuspForcePerCorner
       );
@@ -399,6 +429,7 @@ export class VehicleSolverPlugin implements IModulusPlugin {
       const baseMu = isFront ? vehicle.peakTireMuFront : vehicle.peakTireMuRear;
       const loadSensitiveMu = computeLoadSensitiveMu(baseMu, normalLoadN, 3600);
       const surfaceGrip = SURFACE_GRIP[w.surface] ?? 1.0;
+      const surfaceBMult = SURFACE_PACEJKA_B_MULT[w.surface] ?? 1.0;
       const cornerDamageMult = 1 - clamp(state.damageZones[i] ?? 0, 0, 1) * 0.25;
       const effectiveMu =
         loadSensitiveMu * gripBias * w.thermalGripMultiplier * surfaceGrip * cornerDamageMult;
@@ -411,7 +442,7 @@ export class VehicleSolverPlugin implements IModulusPlugin {
           : 1.0 - absCamberDeg * 0.035;
       const longCamberMult = Math.max(0.88, 1.0 - Math.max(0, absCamberDeg - 1.5) * 0.018);
 
-      // 5. Substepped Wheel Spin + Progressive Pacejka + Combined Slip Circle
+      // 5. Substepped Wheel Spin + Surface-Aware Progressive Pacejka + Combined Slip Circle
       const subDt = dt / WHEEL_SPIN_SUBSTEPS;
       const crr = (SURFACE_ROLLING_RESISTANCE[w.surface] ?? 0.014) * pressureRrFactor;
       const rollingResistTorque = crr * normalLoadN * wheelRadiusM;
@@ -419,11 +450,19 @@ export class VehicleSolverPlugin implements IModulusPlugin {
       const speedScaleLat = clamp(Math.hypot(vLong, vLat) / 0.8, 0, 1);
       const slipAngleRad = Math.atan2(vLat, Math.max(Math.abs(vLong), 1.15)) * speedScaleLat;
 
+      // Handbrake rear-lock kinetic drop breaks rear traction smoothly on command for drift initiation,
+      // while soft high-slip rear lateral curvature keeps sustained slides catchable on keyboard.
+      const isRearHandbrakeSliding = !isFront && handbrakeInput > 0.12 && state.speedMs > 3.5;
+      const handbrakeLatScale = isRearHandbrakeSliding ? 1 - handbrakeInput * 0.74 : 1.0;
+      const handbrakeLongScale = isRearHandbrakeSliding ? 1 - handbrakeInput * 0.35 : 1.0;
+      const latPacejkaC = !isFront ? Math.min(1.28, vehicle.pacejkaC) : vehicle.pacejkaC;
+      const latPacejkaE = !isFront ? Math.min(-0.45, vehicle.pacejkaE) : vehicle.pacejkaE;
+
       let fyPure = -evaluatePacejka(slipAngleRad, {
-        B: vehicle.pacejkaB,
-        C: vehicle.pacejkaC,
-        D: maxTireForceN * latCamberMult,
-        E: vehicle.pacejkaE,
+        B: vehicle.pacejkaB * surfaceBMult,
+        C: latPacejkaC,
+        D: maxTireForceN * latCamberMult * handbrakeLatScale,
+        E: latPacejkaE,
       });
 
       if (lowSpeedBlend > 0) {
@@ -447,9 +486,9 @@ export class VehicleSolverPlugin implements IModulusPlugin {
         lastKappa = kappa;
 
         const fxPure = evaluatePacejka(kappa, {
-          B: vehicle.pacejkaB * 1.06,
+          B: vehicle.pacejkaB * surfaceBMult * 1.06,
           C: longC,
-          D: maxTireForceN * longCamberMult,
+          D: maxTireForceN * longCamberMult * handbrakeLongScale,
           E: longE,
         });
 
@@ -492,9 +531,15 @@ export class VehicleSolverPlugin implements IModulusPlugin {
         w.lockupIntensity = 0;
       }
 
-      const latScrub = clamp((Math.abs(slipAngleRad) - 0.075) / 0.18, 0, 1);
-      const longScrub = clamp((Math.abs(lastKappa) - 0.14) / 0.42, 0, 1);
-      w.scrubIntensity = clamp(Math.max(latScrub, longScrub * 0.85) * loadCueWeight * speedCueWeight, 0, 1);
+      const isLooseSurface = w.surface === 'gravel' || w.surface === 'dirt';
+      const latScrub = clamp((Math.abs(slipAngleRad) - (isLooseSurface ? 0.05 : 0.075)) / 0.18, 0, 1);
+      const longScrub = clamp((Math.abs(lastKappa) - (isLooseSurface ? 0.10 : 0.14)) / 0.42, 0, 1);
+      const looseBaseline = isLooseSurface ? clamp(state.speedMs / 25, 0, 0.25) : 0;
+      w.scrubIntensity = clamp(
+        Math.max(latScrub, longScrub * 0.85, looseBaseline) * loadCueWeight * speedCueWeight,
+        0,
+        1
+      );
 
       // Stationary parking hold
       if (isParkedHold) {

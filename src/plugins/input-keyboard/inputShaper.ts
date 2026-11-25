@@ -70,35 +70,47 @@ export class DeterministicInputShaper {
     const brakeRate = brakeTarget > this.brake ? 7.5 : 16.0;
     this.throttle = moveTowards(this.throttle, throttleTarget, throttleRate * dt);
     this.brake = moveTowards(this.brake, brakeTarget, brakeRate * dt);
-    this.handbrake = moveTowards(this.handbrake, handbrakeTarget, 14.0 * dt);
+    this.handbrake = moveTowards(this.handbrake, handbrakeTarget, 16.0 * dt);
 
-    // Speed-progressive steering authority (smoothly active from ~7 mph upward)
+    // Speed-progressive steering authority, expanding dynamically during drifts / handbrake
+    // so keyboard players always have sufficient lock to initiate, hold, and link slides.
     const speedMs = Math.max(0, state.speedMs);
-    const authority = computeSpeedSteerAuthority(speedMs);
+    const baseAuthority = computeSpeedSteerAuthority(speedMs);
+    const bodySlipRad =
+      state.localVelocity.z > 2.5
+        ? Math.atan2(state.localVelocity.x, state.localVelocity.z)
+        : 0;
+    const absSlipRad = Math.abs(bodySlipRad);
+    const driftLockBonus =
+      clamp((absSlipRad - 0.12) * 0.95, 0, 0.45) + this.handbrake * 0.22;
+    const authority = clamp(baseAuthority + driftLockBonus, baseAuthority, 0.96);
     const targetSteer = rawSteer * authority;
 
-    // Prompt initial turn-in on small taps, faster crisp recentering/counter-steer reversal
+    // Prompt initial turn-in on small taps, faster crisp recentering/counter-steer transitions
     const isReturning =
       Math.abs(rawSteer) < 0.02 || Math.sign(targetSteer) !== Math.sign(this.steer);
     const baseTurnInRate = clamp(4.2 - (speedMs / 35) * 1.4, 2.4, 4.2);
-    // Boost initial bite near center so quick line-correction taps feel immediate
     const nearCenterBoost = Math.abs(this.steer) < authority * 0.35 ? 1.25 : 1.0;
-    const steerRate = isReturning ? 7.8 : baseTurnInRate * nearCenterBoost;
+    const transitionBoost = absSlipRad > 0.16 && isReturning ? 1.28 : 1.0;
+    const steerRate = isReturning
+      ? 7.8 * transitionBoost
+      : baseTurnInRate * nearCenterBoost;
 
     this.steer = moveTowards(this.steer, targetSteer, steerRate * dt);
 
-    // Catchable counter-steer assist scaled by assistPreset (0 in Pro, reduced under handbrake)
+    // Catchable counter-steer assist scaled by assistPreset (0 in Pro).
+    // Gently aligns front wheels into a developing rear slide while backing off during
+    // active handbrake initiation so the player can pitch the car into a drift cleanly.
     let counterSteer = 0;
     const assistGain =
-      assistPreset === 'beginner' ? 0.44 : assistPreset === 'sport' ? 0.24 : 0.0;
+      assistPreset === 'beginner' ? 0.48 : assistPreset === 'sport' ? 0.28 : 0.0;
 
-    if (assistGain > 0 && state.localVelocity.z > 5.0) {
-      const bodySlipRad = Math.atan2(state.localVelocity.x, state.localVelocity.z);
-      const speedBlend = clamp((state.localVelocity.z - 5.0) / 10.0, 0, 1);
-      const handbrakeScale = 1.0 - this.handbrake * 0.7;
+    if (assistGain > 0 && state.localVelocity.z > 4.0) {
+      const speedBlend = clamp((state.localVelocity.z - 4.0) / 8.0, 0, 1);
+      const handbrakeScale = 1.0 - this.handbrake * 0.78;
       // Sliding right (+vRight -> +bodySlipRad) -> counter-steer right (-steer)
       counterSteer =
-        clamp(-bodySlipRad * assistGain, -0.32, 0.32) * speedBlend * handbrakeScale;
+        clamp(-bodySlipRad * assistGain, -0.46, 0.46) * speedBlend * handbrakeScale;
     }
 
     const finalSteer = clamp(this.steer + counterSteer, -1, 1);
