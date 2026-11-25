@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Modulus contact test</title>
+  <style>
+    :root { color-scheme: dark; font: 16px system-ui, sans-serif; color: #eef4ef; background: #111915; }
+    body { margin: 0 auto; max-width: 42rem; padding: 1rem; }
+    h1 { margin: 0 0 .5rem; }
+    p { margin: .5rem 0; }
+    form { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin: 1rem 0; }
+    input, button { font: inherit; padding: .45rem .65rem; }
+    input { width: 11rem; }
+    button { color: #111915; background: #b9e994; border: 1px solid #b9e994; border-radius: .3rem; }
+    button:disabled { opacity: .5; }
+    canvas { display: block; width: min(100%, 20rem); height: auto; border: 1px solid #47584c; background: #202a24; }
+    #status { min-height: 1.5em; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Modulus contact test</h1>
+    <p>Open the same room in two Chrome windows and use <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or the arrow keys. Your car is green.</p>
+    <form id="join">
+      <label for="room">Room</label>
+      <input id="room" pattern="[a-z0-9\-]{1,32}" maxlength="32" required>
+      <button>Join room</button>
+    </form>
+    <p id="status" role="status">Ready</p>
+    <canvas width="256" height="520" aria-label="Top-down multiplayer practice pad"></canvas>
+  </main>
+  <script>
+    const form = document.querySelector('#join');
+    const room = document.querySelector('#room');
+    const joinButton = form.querySelector('button');
+    const status = document.querySelector('#status');
+    const canvas = document.querySelector('canvas');
+    const context = canvas.getContext('2d');
+    const keys = new Set();
+    const driveKeys = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowLeft', 'ArrowDown', 'ArrowRight']);
+    let driverId;
+    let socket;
+    let inputTimer;
+
+    room.value = new URLSearchParams(location.search).get('room') || 'first-contact';
+
+    function sendInput() {
+      if (socket?.readyState !== WebSocket.OPEN) return;
+      const throttle = Number(keys.has('KeyW') || keys.has('ArrowUp'));
+      const brake = Number(keys.has('KeyS') || keys.has('ArrowDown'));
+      const left = keys.has('KeyA') || keys.has('ArrowLeft');
+      const right = keys.has('KeyD') || keys.has('ArrowRight');
+      socket.send(JSON.stringify({ type: 'input', throttle, brake, steer: Number(right) - Number(left) }));
+    }
+
+    function draw(drivers) {
+      context.fillStyle = '#202a24';
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.strokeStyle = '#719579';
+      context.strokeRect(64, 4, 128, 512);
+      for (const driver of drivers) {
+        context.save();
+        context.translate(128 + driver.x * 8, 260 + driver.z * 8);
+        context.rotate(-driver.yaw);
+        context.fillStyle = driver.id === driverId ? '#b9e994' : '#dfab77';
+        context.fillRect(-7, -16, 14, 32);
+        context.fillStyle = '#31483d';
+        context.fillRect(-5, 4, 10, 5);
+        context.restore();
+      }
+    }
+
+    form.addEventListener('submit', event => {
+      event.preventDefault();
+      const target = new URL('/rooms/' + encodeURIComponent(room.value), location.href);
+      target.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      status.textContent = 'Joining…';
+      joinButton.disabled = true;
+      driverId = undefined;
+      socket = new WebSocket(target);
+      socket.addEventListener('open', () => {
+        inputTimer = setInterval(sendInput, 1000 / 15);
+        joinButton.blur();
+        room.blur();
+      });
+      socket.addEventListener('message', event => {
+        const message = JSON.parse(event.data);
+        if (message.type === 'welcome') driverId = message.id;
+        if (message.type === 'snapshot') {
+          const ownCar = message.drivers.find(driver => driver.id === driverId);
+          if (ownCar) {
+            const speedMph = Math.round(ownCar.speed * 2.23694);
+            status.textContent = `${message.drivers.length} of 4 drivers · ${speedMph} MPH`;
+          }
+          draw(message.drivers);
+        }
+      });
+      socket.addEventListener('close', event => {
+        clearInterval(inputTimer);
+        keys.clear();
+        draw([]);
+        status.textContent = event.reason || 'Disconnected. You can try joining again.';
+        joinButton.disabled = false;
+      });
+    });
+
+    window.addEventListener('keydown', event => {
+      if (socket?.readyState !== WebSocket.OPEN || form.contains(event.target) || !driveKeys.has(event.code)) return;
+      event.preventDefault();
+      keys.add(event.code);
+    });
+    window.addEventListener('keyup', event => keys.delete(event.code));
+    window.addEventListener('blur', () => {
+      keys.clear();
+      sendInput();
+    });
+    draw([]);
+  </script>
+</body>
+</html>

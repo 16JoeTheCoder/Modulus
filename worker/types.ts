@@ -11,6 +11,7 @@ export interface Env {
   ADMIN_EMAILS?: string;
   EMAIL_FROM?: string;
   EMAIL_API_KEY?: string;
+  GOOGLE_CLIENT_ID?: string;
 }
 
 export interface HonoVariables {

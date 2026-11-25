@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   CheckCircle2,
   Cloud,
@@ -20,6 +20,15 @@ export interface IAuthModalProps {
 }
 
 type AuthStep = 'email' | 'otp';
+
+interface GoogleIdentity {
+  accounts: {
+    id: {
+      initialize: (cfg: { client_id: string; callback: (r: { credential: string }) => void }) => void;
+      renderButton: (el: HTMLElement, opts: Record<string, unknown>) => void;
+    };
+  };
+}
 
 export function AuthModal({ engine, storage }: IAuthModalProps) {
   const [open, setOpen] = useState(false);
@@ -63,6 +72,56 @@ export function AuthModal({ engine, storage }: IAuthModalProps) {
     };
   }, [engine, storage]);
 
+  const googleBtnRef = useRef<HTMLDivElement | null>(null);
+  const [googleClientId, setGoogleClientId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open || googleClientId) return;
+    fetch('/api/auth/config', { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { googleClientId?: string | null } | null) => {
+        if (d?.googleClientId) setGoogleClientId(d.googleClientId);
+      })
+      .catch(() => undefined);
+  }, [open, googleClientId]);
+
+  useEffect(() => {
+    if (!open || user || step !== 'email' || !googleClientId) return;
+    let cancelled = false;
+    const render = () => {
+      const g = (window as unknown as { google?: GoogleIdentity }).google;
+      if (cancelled || !g || !googleBtnRef.current) return;
+      g.accounts.id.initialize({
+        client_id: googleClientId,
+        callback: (resp) => void handleGoogleCredential(resp.credential),
+      });
+      g.accounts.id.renderButton(googleBtnRef.current, {
+        theme: 'filled_black',
+        size: 'large',
+        shape: 'pill',
+        text: 'continue_with',
+        width: 320,
+      });
+    };
+    if ((window as unknown as { google?: GoogleIdentity }).google) {
+      render();
+    } else {
+      const existing = document.getElementById('gsi-client') as HTMLScriptElement | null;
+      const script = existing ?? document.createElement('script');
+      if (!existing) {
+        script.id = 'gsi-client';
+        script.src = 'https://accounts.google.com/gsi/client';
+        script.async = true;
+        document.head.appendChild(script);
+      }
+      script.addEventListener('load', render);
+    }
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, user, step, googleClientId]);
+
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (e: KeyboardEvent) => {
@@ -73,6 +132,31 @@ export function AuthModal({ engine, storage }: IAuthModalProps) {
   }, [open]);
 
   if (!open) return null;
+
+  const handleGoogleCredential = async (credential: string) => {
+    setError(null);
+    setLoading(true);
+    try {
+      const res = await fetch('/api/auth/google', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ credential }),
+      });
+      const data = (await res.json().catch(() => ({}))) as IGarageSyncResponse & {
+        error?: string;
+      };
+      if (!res.ok) throw new Error(data.error ?? `Google sign-in failed (${res.status})`);
+      storage.reconcileCloudGarage(data);
+      engine.updateBuild(storage.getGarageState().activeBuild);
+      setUser(data.user);
+      setOpen(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Google sign-in failed');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleRequestOtp = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -325,6 +409,17 @@ export function AuthModal({ engine, storage }: IAuthModalProps) {
               >
                 {loading ? 'Sending 6-Digit Code...' : 'Send 6-Digit Code'}
               </button>
+
+              {googleClientId && (
+                <>
+                  <div className="flex items-center gap-3 text-[10px] uppercase tracking-wider text-slate-500">
+                    <div className="h-px flex-1 bg-[#1E2532]" />
+                    or
+                    <div className="h-px flex-1 bg-[#1E2532]" />
+                  </div>
+                  <div ref={googleBtnRef} className="flex justify-center" />
+                </>
+              )}
             </form>
           ) : (
             <form onSubmit={handleVerifyOtp} className="space-y-4">

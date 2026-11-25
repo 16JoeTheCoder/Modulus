@@ -1,5 +1,7 @@
 # MODULUS: System Architecture & Orchestration Blueprint
 
+> For the next implementation pass, start with the [Modulus rebuild plan](MODULUS_REBUILD_PLAN.md). This file describes the original architecture and its initial Antigravity prompt.
+
 **Modulus** (`https://modulus.josefyang.com`) is a deterministic, plugin-driven 3D engineering racing simulator and installable Progressive Web App (PWA) running 100% on the **Cloudflare Free-Tier Edge Stack** (Workers Static Assets, Hono API, D1, Workers KV, and 30-Day Email OTP Auth). It pairs an *Art of Rally*-inspired sunlit low-poly track aesthetic with a high-tech dark motorsport Engineering Lab.
 
 ---
