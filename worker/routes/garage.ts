@@ -13,6 +13,13 @@ import { maskEmail } from '../auth/crypto';
 import { requireAuth } from '../auth/session';
 import { getActiveBalanceConfig, getUserGarageSync } from '../db/queries';
 import type { HonoEnv } from '../types';
+import {
+  CURRENT_PHYSICS_VERSION,
+  CURRENT_RULESET_VERSION,
+  normalizeTrackVersion,
+  type VerificationLevel,
+} from '../../src/contracts/simulation';
+import { evaluateLapSubmissionSanity, getTrackSchemaVersion } from './lapIntegrity';
 
 export const publicAndGarageRoutes = new Hono<HonoEnv>();
 
@@ -193,7 +200,15 @@ interface LapJoinRow {
   user_id: string;
   email: string;
   track_id: string;
+  track_version: string;
   balance_version_id: string;
+  physics_version: string;
+  ruleset_version: string;
+  weather_key: string;
+  assist_preset: string;
+  transmission_mode: string;
+  session_mode: string;
+  verification_level: string;
   lap_time_ms: number;
   sector_times_json: string;
   chassis_id: string;
@@ -203,6 +218,13 @@ interface LapJoinRow {
   created_at: string;
 }
 
+function normalizeStoredVerificationLevel(raw: string | null | undefined): VerificationLevel {
+  // 'verified' is unreachable until trusted deterministic replay verification is enabled.
+  if (raw === 'sanity_checked') return 'sanity_checked';
+  if (raw === 'local') return 'local';
+  return 'unverified';
+}
+
 publicAndGarageRoutes.get('/laps', async (c) => {
   const trackId = c.req.query('trackId')?.trim();
   if (!trackId) {
@@ -210,19 +232,50 @@ publicAndGarageRoutes.get('/laps', async (c) => {
   }
 
   const activeConfig = await getActiveBalanceConfig(c.env);
-  const versionId = c.req.query('version')?.trim() || activeConfig.version_id;
+  const track = TRACKS_BY_ID.get(trackId);
+  const activeTrackVersion = track ? getTrackSchemaVersion(track) : normalizeTrackVersion(undefined);
 
-  const rows = await c.env.DB.prepare(
-    `SELECT l.id, l.user_id, u.email, l.track_id, l.balance_version_id, l.lap_time_ms,
-            l.sector_times_json, l.chassis_id, l.peak_speed_kph, l.pwr_ratio,
+  const versionId = c.req.query('version')?.trim() || activeConfig.version_id;
+  const trackVersion = c.req.query('trackVersion')?.trim() || activeTrackVersion;
+  const physicsVersion = c.req.query('physicsVersion')?.trim() || '';
+  const rulesetVersion = c.req.query('rulesetVersion')?.trim() || '';
+  const includeLegacy = c.req.query('includeLegacy') === 'true';
+
+  const whereClauses: string[] = [
+    'l.track_id = ?',
+    "l.session_mode = 'time_trial'",
+    'l.is_ai_assisted = 0',
+  ];
+  const bindings: Array<string | number> = [trackId];
+
+  if (!includeLegacy) {
+    whereClauses.push('l.balance_version_id = ?');
+    bindings.push(versionId);
+    whereClauses.push('l.track_version = ?');
+    bindings.push(trackVersion);
+  }
+  if (physicsVersion) {
+    whereClauses.push('l.physics_version = ?');
+    bindings.push(physicsVersion);
+  }
+  if (rulesetVersion) {
+    whereClauses.push('l.ruleset_version = ?');
+    bindings.push(rulesetVersion);
+  }
+
+  const sql = `SELECT l.id, l.user_id, u.email, l.track_id, l.track_version, l.balance_version_id,
+            l.physics_version, l.ruleset_version, l.weather_key, l.assist_preset,
+            l.transmission_mode, l.session_mode, l.verification_level,
+            l.lap_time_ms, l.sector_times_json, l.chassis_id, l.peak_speed_kph, l.pwr_ratio,
             l.is_ai_assisted, l.created_at
      FROM lap_records l
      INNER JOIN users u ON u.id = l.user_id
-     WHERE l.track_id = ? AND l.balance_version_id = ?
+     WHERE ${whereClauses.join(' AND ')}
      ORDER BY l.lap_time_ms ASC
-     LIMIT 50`
-  )
-    .bind(trackId, versionId)
+     LIMIT 50`;
+
+  const rows = await c.env.DB.prepare(sql)
+    .bind(...bindings)
     .all<LapJoinRow>();
 
   const records: ILapLeaderboardEntry[] = (rows.results ?? []).map((row) => {
@@ -233,12 +286,28 @@ publicAndGarageRoutes.get('/laps', async (c) => {
     } catch {
       sectorTimesMs = [];
     }
+    const rowTrackVer = normalizeTrackVersion(row.track_version);
+    const isLegacyVersion =
+      row.balance_version_id !== activeConfig.version_id ||
+      rowTrackVer !== activeTrackVersion ||
+      row.physics_version !== CURRENT_PHYSICS_VERSION ||
+      row.ruleset_version !== CURRENT_RULESET_VERSION;
+
     return {
       id: row.id,
       userId: row.user_id,
       emailMasked: maskEmail(row.email),
       trackId: row.track_id,
+      trackVersion: rowTrackVer,
       balanceVersionId: row.balance_version_id,
+      physicsVersion: row.physics_version || 'phys-1.0.0',
+      rulesetVersion: row.ruleset_version || 'rules-1.0.0',
+      weatherKey: row.weather_key || 'clear_dry',
+      assistPreset: row.assist_preset || 'legacy',
+      transmissionMode: row.transmission_mode || 'manual',
+      sessionMode: row.session_mode || 'time_trial',
+      verificationLevel: normalizeStoredVerificationLevel(row.verification_level),
+      isLegacyVersion,
       lapTimeMs: row.lap_time_ms,
       sectorTimesMs,
       chassisId: row.chassis_id,
@@ -249,7 +318,13 @@ publicAndGarageRoutes.get('/laps', async (c) => {
     };
   });
 
-  return c.json({ versionId, records });
+  return c.json({
+    versionId,
+    trackVersion,
+    physicsVersion: physicsVersion || CURRENT_PHYSICS_VERSION,
+    rulesetVersion: rulesetVersion || CURRENT_RULESET_VERSION,
+    records,
+  });
 });
 
 publicAndGarageRoutes.post('/laps', requireAuth, async (c) => {
@@ -263,11 +338,66 @@ publicAndGarageRoutes.post('/laps', requireAuth, async (c) => {
   const data = parsed.data;
   const activeConfig = await getActiveBalanceConfig(c.env);
   const track = TRACKS_BY_ID.get(data.trackId);
-  const baseReward = track?.baseLapRewardCredits ?? 2500;
-  const aiMult = data.isAiAssisted ? 0.35 : 1.0;
+
+  const sanity = evaluateLapSubmissionSanity(
+    {
+      trackId: data.trackId,
+      trackVersion: data.trackVersion,
+      physicsVersion: data.physicsVersion,
+      rulesetVersion: data.rulesetVersion,
+      balanceVersionId: activeConfig.version_id,
+      weatherKey: data.weatherKey,
+      assistPreset: data.assistPreset,
+      transmissionMode: data.transmissionMode,
+      sessionMode: data.sessionMode,
+      lapTimeMs: data.lapTimeMs,
+      sectorTimesMs: data.sectorTimesMs,
+      peakSpeedKph: data.peakSpeedKph,
+      pwrRatio: data.pwrRatio,
+      isAiAssisted: data.isAiAssisted,
+      checkpointMask: data.checkpointMask,
+      orderedCheckpointsHit: data.orderedCheckpointsHit,
+      telemetrySummary: data.telemetrySummary,
+    },
+    track,
+    activeConfig.version_id
+  );
+
+  if (!sanity.ok || !sanity.normalized || !track) {
+    return c.json(
+      {
+        error: sanity.error ?? 'Lap failed integrity validation',
+        code: sanity.code ?? 'INTEGRITY_REJECTED',
+        verificationLevel: 'unverified',
+      },
+      400
+    );
+  }
+
+  const norm = sanity.normalized;
+
+  // Duplicate submission check (indexed by user_id + submission_fingerprint)
+  const existingDup = await c.env.DB.prepare(
+    'SELECT id FROM lap_records WHERE user_id = ? AND submission_fingerprint = ? LIMIT 1'
+  )
+    .bind(user.id, norm.submissionFingerprint)
+    .first<{ id: string }>();
+
+  if (existingDup) {
+    return c.json(
+      {
+        error: 'Duplicate lap submission rejected.',
+        code: 'DUPLICATE_SUBMISSION',
+        existingId: existingDup.id,
+      },
+      409
+    );
+  }
+
+  const baseReward = track.baseLapRewardCredits ?? 2500;
   const creditsAwarded = Math.max(
     250,
-    Math.round(baseReward * activeConfig.economy_bias.payout_mult * aiMult)
+    Math.round(baseReward * activeConfig.economy_bias.payout_mult)
   );
 
   const lapId = `lap_${crypto.randomUUID()}`;
@@ -289,22 +419,35 @@ publicAndGarageRoutes.post('/laps', requireAuth, async (c) => {
   await c.env.DB.batch([
     c.env.DB.prepare(
       `INSERT INTO lap_records (
-        id, user_id, build_id, track_id, balance_version_id, lap_time_ms,
-        sector_times_json, chassis_id, peak_speed_kph, pwr_ratio,
-        is_ai_assisted, credits_awarded, telemetry_summary_json, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        id, user_id, build_id, track_id, track_version, balance_version_id,
+        physics_version, ruleset_version, weather_key, assist_preset,
+        transmission_mode, session_mode, verification_level, checkpoint_mask,
+        submission_fingerprint, lap_time_ms, sector_times_json, chassis_id,
+        peak_speed_kph, pwr_ratio, is_ai_assisted, credits_awarded,
+        telemetry_summary_json, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       lapId,
       user.id,
       verifiedBuildId,
       data.trackId,
+      norm.trackVersion,
       activeConfig.version_id,
+      norm.physicsVersion,
+      norm.rulesetVersion,
+      norm.weatherKey,
+      norm.assistPreset,
+      norm.transmissionMode,
+      norm.sessionMode,
+      sanity.verificationLevel,
+      norm.checkpointMask,
+      norm.submissionFingerprint,
       data.lapTimeMs,
       JSON.stringify(data.sectorTimesMs),
       data.chassisId,
       data.peakSpeedKph,
       data.pwrRatio,
-      data.isAiAssisted ? 1 : 0,
+      0, // Official Time Trial records are strictly non-AI
       creditsAwarded,
       JSON.stringify(data.telemetrySummary ?? {}),
       nowIso
@@ -324,6 +467,11 @@ publicAndGarageRoutes.post('/laps', requireAuth, async (c) => {
     ok: true,
     id: lapId,
     balanceVersionId: activeConfig.version_id,
+    trackVersion: norm.trackVersion,
+    physicsVersion: norm.physicsVersion,
+    rulesetVersion: norm.rulesetVersion,
+    sessionMode: norm.sessionMode,
+    verificationLevel: sanity.verificationLevel,
     creditsAwarded,
     credits: updatedUser?.credits ?? user.credits + creditsAwarded,
   });
