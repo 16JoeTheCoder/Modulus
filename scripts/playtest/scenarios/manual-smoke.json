@@ -1,0 +1,21 @@
+{
+  "description": "Manual keyboard driving smoke test: straight launch, steer right/left, brake, camera cycle, reset.",
+  "probes": [0.02, 0.05, 0.1, 0.15],
+  "cornerWindows": [
+    { "name": "LaunchAndS1Entry", "entryProgress": 0.005, "exitProgress": 0.12 }
+  ],
+  "traceIntervalMs": 100,
+  "actions": [
+    { "type": "hold", "key": "KeyW", "ms": 3000 },
+    { "type": "screenshot", "name": "02b-accel" },
+    { "type": "hold", "keys": ["KeyW", "KeyD"], "ms": 700 },
+    { "type": "hold", "keys": ["KeyW", "KeyA"], "ms": 700 },
+    { "type": "hold", "key": "KeyS", "ms": 1800 },
+    { "type": "screenshot", "name": "02c-after-brake" },
+    { "type": "press", "key": "KeyC", "holdMs": 100 },
+    { "type": "wait", "ms": 400 },
+    { "type": "screenshot", "name": "02d-camera-next" },
+    { "type": "press", "key": "KeyR", "holdMs": 100 },
+    { "type": "wait", "ms": 400 }
+  ]
+}
