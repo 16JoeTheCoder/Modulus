@@ -61,12 +61,13 @@ export class ThermalsPlugin implements IModulusPlugin {
       engineHeatW = (idleFloorW + (combustionWasteW + boostHeatW) * overRevMult) * heatBias;
     }
 
-    // Radiator heat rejection scaled by airflow speed and thermostat opening
+    // Radiator heat rejection scaled by airflow speed, thermostat opening, and cooling damage zone
+    const coolingHealth = 1 - clamp(state.damageZones[8] ?? 0, 0, 1) * 0.55;
     const airflowFactor = 0.28 + 0.72 * clamp(speedMs / 42, 0, 1.35);
     const thermostatOpen = clamp((state.engineTempC - 74) / 14, 0.08, 1.0);
     const engineDeltaT = Math.max(0, state.engineTempC - ambientC);
     const engineCoolW =
-      vehicle.radiatorCoolingKw * 1000 * airflowFactor * thermostatOpen * (engineDeltaT / 75);
+      vehicle.radiatorCoolingKw * 1000 * coolingHealth * airflowFactor * thermostatOpen * (engineDeltaT / 75);
 
     const engineCap = Math.max(8000, vehicle.engineThermalCapacityJPerC);
     state.engineTempC = clamp(

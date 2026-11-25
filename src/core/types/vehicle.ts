@@ -25,8 +25,18 @@ import type {
   Vec3,
 } from './content';
 
+import type {
+  AssistPreset,
+  DamageZoneTuple,
+  IVehicleCollisionHull,
+  IVehicleImpactPulse,
+  ReverseState,
+  SurfaceType as ContractSurfaceType,
+  TransmissionMode,
+} from '../../contracts/simulation';
+
 export type WheelIndex = 0 | 1 | 2 | 3; // 0: FL, 1: FR, 2: RL, 3: RR
-export type SurfaceType = 'tarmac' | 'kerb' | 'grass' | 'gravel';
+export type SurfaceType = ContractSurfaceType;
 
 /**
  * Full 8-Module Vehicle Customization & Tuning Configuration
@@ -36,6 +46,9 @@ export interface IVehicleBuildConfig {
   id: string;
   name: string;
   chassisId: string;
+  /** Optional version metadata: legacy saved builds without it default to schema v1. */
+  buildSchemaVersion?: number;
+  buildRevision?: number;
   paintHex: string;
   accentHex: string;
 
@@ -205,6 +218,12 @@ export interface ICompiledVehicle {
   suspensionMaxTravelM: number;
   hardpoints: IHardpointMap;
 
+  // Render-vs-Collision Anchors & Hull (per-chassis)
+  cockpitEyeLocal: Vec3;
+  steeringWheelLocal: Vec3;
+  hoodCamLocal: Vec3;
+  collisionHull: IVehicleCollisionHull;
+
   // Powertrain & Gearbox
   idleRpm: number;
   redlineRpm: number;
@@ -267,7 +286,10 @@ export interface IInputState {
   gearUp: boolean;
   gearDown: boolean;
   resetVehicle: boolean;
-  inputSource: 'keyboard' | 'touch' | 'ai';
+  /** Rising edge of brake/S press for deterministic reverse-on-fresh-press at standstill. */
+  brakeFreshPress?: boolean;
+  reverseRequest?: boolean;
+  inputSource: 'keyboard' | 'touch' | 'gamepad' | 'ai' | 'remote' | 'replay';
 }
 
 export interface IPointForceRequest {
@@ -303,10 +325,19 @@ export interface IWheelRuntimeState {
   thermalGripMultiplier: number;
   brakeTempC: number;
   brakeFadeMultiplier: number;
+  /** 0..1 braking lockup cue for HUD & audio. */
+  lockupIntensity: number;
+  /** 0..1 tire scrub/slide cue for audio & FX. */
+  scrubIntensity: number;
 }
 
 export interface IVehicleRuntimeState {
-  // Spatial & Rigid Body (World Space; +Y up, -Z or +Z forward: MODULUS convention +Z forward, +X left or right: right-handed Three.js: +X right, +Y up, -Z forward OR +Z forward; see Engine convention: vehicle local forward is +Z, up is +Y, left is +X -> wait: in right-handed coords, X cross Y = Z, so +X left, +Y up, +Z forward OR -X left, +Y up, -Z forward! Let's standardize strictly: Local Forward = +Z, Local Up = +Y, Local Right = -X [or Local Left = +X]. Let's document exact unit vectors on state!)
+  // Fixed-Step Simulation Clock & Identity
+  simTick: number;
+  simTimeMs: number;
+  vehicleId: string;
+
+  // Spatial & Rigid Body (Local +X = Left, +Y = Up, +Z = Forward; Local Right = -X)
   position: Vec3;
   prevPosition: Vec3;
   rotation: Quat;
@@ -320,19 +351,31 @@ export interface IVehicleRuntimeState {
 
   // Speed & Accelerations
   speedMs: number;
+  forwardSpeedMs: number; // signed longitudinal speed (+forward, -reverse)
   speedKph: number;
   longitudinalG: number;
   lateralG: number;
   yawRateRadS: number;
+  bodySlipAngleRad: number;
+
+  // Steering & Controls Telemetry
+  rawSteerInput: number;
+  commandedSteer: number;
+  frontWheelAngleRad: number;
+  reverseState: ReverseState;
+  transmissionMode: TransmissionMode;
+  assistPreset: AssistPreset;
 
   // Powertrain Runtime
   engineRpm: number;
   engineTorqueNm: number;
   enginePowerHp: number;
+  engineLoad: number; // 0..1 normalized combustion load
   turboBoostBar: number;
   gear: number; // -1 = R, 0 = N, 1..7 = Forward gears
   shiftTimerS: number;
   isShifting: boolean;
+  shiftDirection: -1 | 0 | 1;
   clutchEngagement: number; // 0..1
   fuelLiters: number;
 
@@ -353,6 +396,10 @@ export interface IVehicleRuntimeState {
   // 4-Corner Wheel States (0: FL, 1: FR, 2: RL, 3: RR)
   wheels: [IWheelRuntimeState, IWheelRuntimeState, IWheelRuntimeState, IWheelRuntimeState];
 
+  // Progressive Damage (10 zones: 0..1) & Latest Impact Pulse
+  damageZones: DamageZoneTuple;
+  lastImpact: IVehicleImpactPulse | null;
+
   // Per-Tick Force Accumulators consumed by physics-rapier
   forceAccumulatorWorld: Vec3;
   torqueAccumulatorWorld: Vec3;
@@ -362,6 +409,8 @@ export interface IVehicleRuntimeState {
   aiEnabled: boolean;
   aiTargetPointWorld: Vec3;
   splineProgress: number; // 0..1 along track loop
+  lapArmed: boolean;
+  checkpointMask: number;
   currentLap: number;
   currentSector: number; // 0, 1, 2
   currentLapTimeMs: number;
@@ -378,6 +427,8 @@ export const VehicleBuildConfigSchema = z.object({
   id: z.string().min(1).max(80),
   name: z.string().min(1).max(80),
   chassisId: z.string().min(1).max(60),
+  buildSchemaVersion: z.number().int().min(1).optional(),
+  buildRevision: z.number().int().min(1).optional(),
   paintHex: z.string().regex(/^#[0-9A-Fa-f]{6}$/),
   accentHex: z.string().regex(/^#[0-9A-Fa-f]{6}$/),
   equippedPartIds: z.record(z.string(), z.string()),

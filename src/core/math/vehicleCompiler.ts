@@ -1,4 +1,5 @@
 import { CHASSIS_BY_ID, CHASSIS_CATALOG, PARTS_BY_ID } from '../../content';
+import type { IVehicleCollisionHull } from '../../contracts/simulation';
 import type {
   ICompiledVehicle,
   IDynoPoint,
@@ -46,12 +47,33 @@ const ENGINE_LAYOUT_SPECS: Record<
   IVehicleBuildConfig['engine']['layout'],
   { massMult: number; cgDeltaY: number; torquePerLiterNm: number; baseRedline: number; fuelMult: number }
 > = {
-  I4: { massMult: 0.9, cgDeltaY: 0.0, torquePerLiterNm: 108, baseRedline: 7800, fuelMult: 0.92 },
-  'Flat-4': { massMult: 0.95, cgDeltaY: -0.045, torquePerLiterNm: 106, baseRedline: 7600, fuelMult: 0.96 },
-  I6: { massMult: 1.12, cgDeltaY: 0.015, torquePerLiterNm: 112, baseRedline: 8000, fuelMult: 1.02 },
-  V6: { massMult: 1.06, cgDeltaY: 0.005, torquePerLiterNm: 114, baseRedline: 8200, fuelMult: 1.0 },
-  V8: { massMult: 1.26, cgDeltaY: 0.02, torquePerLiterNm: 118, baseRedline: 7400, fuelMult: 1.16 },
-  Rotary: { massMult: 0.72, cgDeltaY: -0.035, torquePerLiterNm: 128, baseRedline: 9500, fuelMult: 1.38 },
+  I4: { massMult: 0.9, cgDeltaY: 0.0, torquePerLiterNm: 102, baseRedline: 7600, fuelMult: 0.92 },
+  'Flat-4': { massMult: 0.95, cgDeltaY: -0.045, torquePerLiterNm: 93, baseRedline: 7200, fuelMult: 0.96 },
+  I6: { massMult: 1.12, cgDeltaY: 0.015, torquePerLiterNm: 108, baseRedline: 7800, fuelMult: 1.02 },
+  V6: { massMult: 1.06, cgDeltaY: 0.005, torquePerLiterNm: 112, baseRedline: 8200, fuelMult: 1.0 },
+  V8: { massMult: 1.26, cgDeltaY: 0.02, torquePerLiterNm: 116, baseRedline: 7400, fuelMult: 1.16 },
+  Rotary: { massMult: 0.72, cgDeltaY: -0.035, torquePerLiterNm: 124, baseRedline: 9500, fuelMult: 1.38 },
+};
+
+const CHASSIS_COCKPIT_ANCHORS: Record<
+  string,
+  { cockpitEyeLocal: Vec3; steeringWheelLocal: Vec3; hoodCamLocal: Vec3 }
+> = {
+  chassis_apex_fr: {
+    cockpitEyeLocal: { x: 0.34, y: 1.06, z: -0.08 },
+    steeringWheelLocal: { x: 0.34, y: 0.84, z: 0.38 },
+    hoodCamLocal: { x: 0.0, y: 1.10, z: 0.72 },
+  },
+  chassis_stratos_mr: {
+    cockpitEyeLocal: { x: 0.32, y: 0.96, z: 0.04 },
+    steeringWheelLocal: { x: 0.32, y: 0.76, z: 0.46 },
+    hoodCamLocal: { x: 0.0, y: 0.98, z: 0.78 },
+  },
+  chassis_valkyrie_proto: {
+    cockpitEyeLocal: { x: 0.0, y: 0.90, z: 0.14 },
+    steeringWheelLocal: { x: 0.0, y: 0.72, z: 0.56 },
+    hoodCamLocal: { x: 0.0, y: 0.92, z: 0.92 },
+  },
 };
 
 const DRIVETRAIN_LOSS: Record<IVehicleBuildConfig['chassis']['drivetrain'], { eff: number; extraMassKg: number }> = {
@@ -499,6 +521,22 @@ export function compileVehicleBuild(
 
   const estimatedBuildValueCredits = Math.round(rawPartsSum * balanceConfig.economy_bias.part_price_mult);
 
+  const anchors = CHASSIS_COCKPIT_ANCHORS[chassis.id] ?? {
+    cockpitEyeLocal: { x: 0.34, y: 1.06, z: -0.08 },
+    steeringWheelLocal: { x: 0.34, y: 0.84, z: 0.38 },
+    hoodCamLocal: { x: 0.0, y: 1.10, z: 0.72 },
+  };
+  const collisionHull: IVehicleCollisionHull = {
+    halfExtents: {
+      x: trackWidthM * 0.44,
+      y: 0.34,
+      z: wheelbaseM * 0.76,
+    },
+    localOffset: { x: 0, y: 0.64, z: 0 },
+    friction: 0.15,
+    restitution: 0.12,
+  };
+
   return {
     build,
     chassisName: chassis.name,
@@ -522,6 +560,10 @@ export function compileVehicleBuild(
     suspensionRestLengthM,
     suspensionMaxTravelM: 0.14,
     hardpoints: scaledHardpoints,
+    cockpitEyeLocal: anchors.cockpitEyeLocal,
+    steeringWheelLocal: anchors.steeringWheelLocal,
+    hoodCamLocal: anchors.hoodCamLocal,
+    collisionHull,
     idleRpm,
     redlineRpm,
     revLimiterRpm,

@@ -1,11 +1,74 @@
 import type * as THREE from 'three';
+import type {
+  AssistPreset,
+  IFixedStepInputFrame,
+  ILapInvalidatedEvent,
+  ITrackCollisionHandle,
+  ITrackRenderHandle,
+  IVehicleCollisionHandle,
+  IVehicleImpactPulse,
+  IVehicleRenderHandle,
+  IVehicleStateSnapshot,
+  LapInvalidationReason,
+  SessionMode,
+  TransmissionMode,
+  VerificationLevel,
+} from '../../contracts/simulation';
 import type { IGlobalBalanceConfig } from './balance';
 import type { ITrackSplineSchema, PartModuleCategory, Quat, Vec3 } from './content';
 import type { ICompiledVehicle, IInputState, IVehicleBuildConfig, IVehicleRuntimeState } from './vehicle';
 import type { TrackSpline } from '../math/spline';
 
 export type VisualMode = 'lab' | 'track';
-export type CameraPreset = 'chase' | 'hood' | 'orbit';
+export type CameraPreset = 'cockpit' | 'hood' | 'chase' | 'orbit';
+
+export interface IDrivingAssistConfig {
+  transmissionMode: TransmissionMode;
+  assistPreset: AssistPreset;
+}
+
+export interface IKeyBindings {
+  throttle: string[];
+  brake: string[];
+  steerLeft: string[];
+  steerRight: string[];
+  handbrake: string[];
+  gearUp: string[];
+  gearDown: string[];
+  reset: string[];
+  camera: string[];
+}
+
+export const DEFAULT_KEY_BINDINGS: IKeyBindings = {
+  throttle: ['KeyW', 'ArrowUp'],
+  brake: ['KeyS', 'ArrowDown'],
+  steerLeft: ['KeyA', 'ArrowLeft'],
+  steerRight: ['KeyD', 'ArrowRight'],
+  handbrake: ['Space'],
+  gearUp: ['KeyE', 'ShiftLeft'],
+  gearDown: ['KeyQ', 'ControlLeft'],
+  reset: ['KeyR'],
+  camera: ['KeyC'],
+};
+
+export interface ISectorSplitPayload {
+  sectorIndex: number;
+  splitTimeMs: number;
+  vehicleId?: string;
+  tick?: number;
+  sessionMode?: SessionMode;
+  trackId?: string;
+  trackVersion?: string;
+  rulesetVersion?: string;
+  lapNumber?: number;
+  sectorCount?: number;
+  sectorName?: string;
+  cumulativeLapTimeMs?: number;
+  deltaToBestSectorMs?: number | null;
+  isBestSector?: boolean;
+  sectorValid?: boolean;
+  checkpointMask?: number;
+}
 
 export interface ILapFinishedPayload {
   trackId: string;
@@ -19,6 +82,23 @@ export interface ILapFinishedPayload {
   pwrRatio: number;
   isAiAssisted: boolean;
   lapValid: boolean;
+  // Shared contract extensions (v2)
+  vehicleId?: string;
+  tick?: number;
+  sessionMode?: SessionMode;
+  trackVersion?: string;
+  geometryHash?: string;
+  physicsVersion?: string;
+  rulesetVersion?: string;
+  buildSchemaVersion?: number;
+  sectorNames?: string[];
+  deltaToBestLapMs?: number | null;
+  isPersonalBest?: boolean;
+  invalidReasons?: LapInvalidationReason[];
+  checkpointMask?: number;
+  orderedCheckpointsHit?: number[];
+  peakSpeedMs?: number;
+  verificationLevel?: VerificationLevel;
 }
 
 export interface ITrackGeometryData {
@@ -30,10 +110,13 @@ export interface ITrackGeometryData {
   /** Optional left/right guardrail wall trimesh for off-track containment */
   wallVertices?: Float32Array;
   wallIndices?: Uint32Array;
-  /** Triangle surface lookup: 0 = tarmac, 1 = kerb, 2 = grass */
+  /** Triangle surface lookup: 0 = tarmac, 1 = kerb, 2 = grass, 3 = gravel, 4 = dirt */
   triangleSurfaces?: Uint8Array;
   spawnPosition: Vec3;
   spawnRotation: Quat;
+  /** Shared contract render-vs-collision handles populated by track-generator (v2) */
+  collisionHandle?: ITrackCollisionHandle;
+  renderHandle?: ITrackRenderHandle;
 }
 
 export interface IAuthUser {
@@ -47,15 +130,19 @@ export interface IAuthUser {
 export interface EngineEventMap {
   'mode:changed': { mode: VisualMode };
   'camera:preset': { preset: CameraPreset };
+  'sim:paused': { paused: boolean };
+  'assists:changed': IDrivingAssistConfig;
   'lab:overlay-toggled': { wireframe: boolean; cgSphere: boolean; aeroVectors: boolean };
   'lab:highlight-module': { module: PartModuleCategory | null };
   'car:build-updated': { build: IVehicleBuildConfig; compiled: ICompiledVehicle };
   'car:rebuilt': { compiled: ICompiledVehicle };
   'vehicle:reset': { position: Vec3; rotation: Quat };
+  'vehicle:impact': IVehicleImpactPulse;
   'track:selected': { trackId: string; schema: ITrackSplineSchema };
   'track:built': { geometry: ITrackGeometryData };
   'lap:finished': ILapFinishedPayload;
-  'sector:split': { sectorIndex: number; splitTimeMs: number };
+  'lap:invalidated': ILapInvalidatedEvent;
+  'sector:split': ISectorSplitPayload;
   'config:updated': { config: IGlobalBalanceConfig };
   'ai:toggled': { enabled: boolean };
   'auth:open-modal': undefined;
@@ -110,8 +197,20 @@ export interface IEngineContext {
   setTrackGeometry(geometry: ITrackGeometryData): void;
 
   getRuntimeState(): IVehicleRuntimeState;
+  getVehicleSnapshot(vehicleId?: string): IVehicleStateSnapshot;
+  getVehicleCollisionHandle(vehicleId?: string): IVehicleCollisionHandle;
+  getVehicleRenderHandle(vehicleId?: string): IVehicleRenderHandle;
   getInputState(): IInputState;
+  getFixedStepInputFrame(): IFixedStepInputFrame;
+  getCurrentTick(): number;
   setHardwareInput(source: 'keyboard' | 'touch', partial: Partial<IInputState>): void;
+
+  setSimulationPaused(paused: boolean): void;
+  isSimulationPaused(): boolean;
+  setDrivingAssists(partial: Partial<IDrivingAssistConfig>): void;
+  getDrivingAssists(): IDrivingAssistConfig;
+  setKeyBindings(partial: Partial<IKeyBindings>): void;
+  getKeyBindings(): IKeyBindings;
 
   resetVehicleToStart(): void;
   setAiEnabled(enabled: boolean): void;
