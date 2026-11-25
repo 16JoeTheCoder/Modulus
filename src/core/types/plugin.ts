@@ -129,6 +129,7 @@ export interface IAuthUser {
 
 export interface EngineEventMap {
   'mode:changed': { mode: VisualMode };
+  'session:mode-changed': { mode: SessionMode };
   'camera:preset': { preset: CameraPreset };
   'sim:paused': { paused: boolean };
   'assists:changed': IDrivingAssistConfig;
@@ -203,6 +204,15 @@ export interface IEngineContext {
   getInputState(): IInputState;
   getFixedStepInputFrame(): IFixedStepInputFrame;
   getCurrentTick(): number;
+  onFixedStep(
+    listener: (
+      tick: number,
+      inputFrame: IFixedStepInputFrame,
+      snapshot: IVehicleStateSnapshot
+    ) => void
+  ): () => void;
+  getSessionMode(): SessionMode;
+  setSessionMode(mode: SessionMode): void;
   setHardwareInput(source: 'keyboard' | 'touch', partial: Partial<IInputState>): void;
 
   setSimulationPaused(paused: boolean): void;
