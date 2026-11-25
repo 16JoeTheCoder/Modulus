@@ -1,4 +1,6 @@
 import chassisData from './chassis/chassis.json';
+import { ROAD_CHASSIS } from './chassis/roadChassis';
+import { FACTORY_SETUPS } from './chassis/factorySetups';
 import enginePartsData from './parts/engines.json';
 import drivetrainPartsData from './parts/drivetrain.json';
 import suspensionPartsData from './parts/suspension.json';
@@ -6,6 +8,7 @@ import tirePartsData from './parts/tires.json';
 import brakePartsData from './parts/brakes.json';
 import aeroPartsData from './parts/aero.json';
 import coolingPartsData from './parts/cooling.json';
+import { AUXILIARY_PARTS } from './parts/auxiliaries';
 
 import switchyardSprintData from './tracks/switchyard_sprint.json';
 import dockyardDriftParkData from './tracks/dockyard_drift_park.json';
@@ -21,7 +24,8 @@ import ovalTestData from './tracks/oval_test.json';
 
 import type { IChassisSchema, IPartSchema, ITrackSplineSchema, IVehicleBuildConfig } from '../core/types';
 
-export const CHASSIS_CATALOG = chassisData as unknown as IChassisSchema[];
+const legacyChassis = chassisData as unknown as IChassisSchema[];
+export const CHASSIS_CATALOG = [legacyChassis[0], ...ROAD_CHASSIS, ...legacyChassis.slice(1)];
 
 export const PARTS_CATALOG: IPartSchema[] = [
   ...(enginePartsData as unknown as IPartSchema[]),
@@ -31,6 +35,7 @@ export const PARTS_CATALOG: IPartSchema[] = [
   ...(brakePartsData as unknown as IPartSchema[]),
   ...(aeroPartsData as unknown as IPartSchema[]),
   ...(coolingPartsData as unknown as IPartSchema[]),
+  ...AUXILIARY_PARTS,
 ];
 
 export const TRACKS_CATALOG: ITrackSplineSchema[] = [
@@ -177,5 +182,34 @@ export function createStarterBuild(): IVehicleBuildConfig {
       fuelLoadL: 30,
       radiatorSpec: 'Standard',
     },
+  };
+}
+
+export function createFactoryBuild(chassis: IChassisSchema, id: string): IVehicleBuildConfig {
+  const base = createStarterBuild();
+  const setup = FACTORY_SETUPS[chassis.id];
+  const drivetrain = { ...base.drivetrain, ...setup?.drivetrain };
+
+  return {
+    ...base,
+    id,
+    name: `${chassis.name} Factory`,
+    chassisId: chassis.id,
+    paintHex: chassis.primaryColorHex,
+    accentHex: chassis.accentColorHex,
+    equippedPartIds: { ...base.equippedPartIds, ...setup?.equippedPartIds },
+    chassis: {
+      ...base.chassis,
+      drivetrain: chassis.defaultDrivetrain,
+      wheelbaseM: chassis.baseWheelbaseM,
+      trackWidthM: chassis.baseTrackWidthM,
+    },
+    engine: { ...base.engine, ...setup?.engine },
+    drivetrain: { ...drivetrain, gearRatios: [...drivetrain.gearRatios] },
+    suspension: { ...base.suspension, ...setup?.suspension },
+    wheelsAndTires: { ...base.wheelsAndTires, ...setup?.wheelsAndTires },
+    brakes: { ...base.brakes, ...setup?.brakes },
+    aero: { ...base.aero, ...setup?.aero },
+    fuelAndCooling: { ...base.fuelAndCooling, ...setup?.fuelAndCooling },
   };
 }

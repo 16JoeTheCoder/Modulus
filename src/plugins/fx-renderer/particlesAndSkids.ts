@@ -110,6 +110,22 @@ export function buildSurfaceFxRig(scene: THREE.Scene): ISurfaceFxRig {
   smokeMesh.instanceMatrix.needsUpdate = true;
   let smokeCursor = 0;
   let smokeEmitAccum = 0;
+  let lastImpactSeq = -1;
+  const tireSmoke = new THREE.Color('#ffffff');
+  const crashSmoke = new THREE.Color('#878a93');
+  const impactOrigin = new THREE.Vector3();
+
+  const emitSmoke = (color: THREE.Color) => {
+    const index = smokeCursor;
+    smokeCursor = (smokeCursor + 1) % MAX_SMOKE_PUFFS;
+    const puff = puffs[index];
+    puff.active = true;
+    puff.age = 0;
+    puff.rotY = Math.random() * Math.PI * 2;
+    smokeMesh.setColorAt(index, color);
+    if (smokeMesh.instanceColor) smokeMesh.instanceColor.needsUpdate = true;
+    return puff;
+  };
 
   // =========================================================================
   // 3. EXHAUST SHIFT-CUT BACKFIRE FLASHES
@@ -194,6 +210,40 @@ export function buildSurfaceFxRig(scene: THREE.Scene): ISurfaceFxRig {
     update(dt, state, input, compiled, carPos, carQuat) {
       let skidDirty = false;
       smokeEmitAccum += dt;
+
+      const impact = state.lastImpact;
+      if (impact && impact.seq !== lastImpactSeq) {
+        lastImpactSeq = impact.seq;
+        if (impact.intensity01 >= 0.14) {
+          const hull = compiled.collisionHull;
+          const wheelIndex = ['wheel_fl', 'wheel_fr', 'wheel_rl', 'wheel_rr'].indexOf(impact.zone);
+          if (wheelIndex >= 0) {
+            const wheel = compiled.wheelPositionsLocal[wheelIndex];
+            impactOrigin.set(wheel.x, wheel.y + 0.22, wheel.z);
+          } else {
+            const left = impact.zone === 'left_side';
+            const right = impact.zone === 'right_side';
+            const rear = impact.zone === 'rear' || impact.zone === 'driveline';
+            impactOrigin.set(
+              (Number(left) - Number(right)) * hull.halfExtents.x,
+              hull.localOffset.y + 0.26,
+              hull.localOffset.z + (left || right ? 0 : (rear ? -1 : 1) * hull.halfExtents.z * 0.88)
+            );
+          }
+          impactOrigin.applyQuaternion(carQuat).add(carPos);
+          const count = Math.round(6 + 14 * impact.intensity01);
+          for (let i = 0; i < count; i++) {
+            const puff = emitSmoke(crashSmoke);
+            puff.pos.copy(impactOrigin);
+            puff.pos.x += (Math.random() - 0.5) * 0.55;
+            puff.pos.y += Math.random() * 0.30;
+            puff.pos.z += (Math.random() - 0.5) * 0.55;
+            puff.vel.set((Math.random() - 0.5) * 3, 1.2 + Math.random() * 1.65, (Math.random() - 0.5) * 3);
+            puff.maxAge = 0.65 + Math.random() * 0.9;
+            puff.baseScale = 0.62 + impact.intensity01 * 0.48 + Math.random() * 0.3;
+          }
+        }
+      }
 
       // 1. Update Skidmarks & Emit Tire Smoke per wheel
       for (let i = 0; i < 4; i++) {
@@ -288,10 +338,7 @@ export function buildSurfaceFxRig(scene: THREE.Scene): ISurfaceFxRig {
 
         // Emit low-poly tire smoke puff on strong slip
         if (slipMag > 0.24 && smokeEmitAccum >= 0.028) {
-          const p = puffs[smokeCursor];
-          smokeCursor = (smokeCursor + 1) % MAX_SMOKE_PUFFS;
-          p.active = true;
-          p.age = 0;
+          const p = emitSmoke(tireSmoke);
           p.maxAge = 0.65 + Math.random() * 0.45;
           p.pos.copy(currContact).addScaledVector(normalVec, 0.14);
           p.vel.set(
@@ -300,7 +347,6 @@ export function buildSurfaceFxRig(scene: THREE.Scene): ISurfaceFxRig {
             (Math.random() - 0.5) * 1.4
           );
           p.baseScale = 0.42 + Math.min(0.65, slipMag * 0.45);
-          p.rotY = Math.random() * Math.PI * 2;
         }
       }
 

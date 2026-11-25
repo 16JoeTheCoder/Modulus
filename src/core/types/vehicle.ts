@@ -4,6 +4,7 @@ import type {
   BlockMaterial,
   BodyPanelMaterial,
   CaliperPistons,
+  ChassisBodyStyle,
   DifferentialType,
   DrivetrainLayout,
   EcuTuneMap,
@@ -69,14 +70,16 @@ export interface IVehicleBuildConfig {
     rearDiffuserId: string;
     rearWingId: string;
     radiatorId: string;
+    brakePadId?: string;
+    oilCoolerId?: string;
   };
 
   // Module 1: Chassis & Monocoque
   chassis: {
     drivetrain: DrivetrainLayout;
     frameMaterial: FrameMaterial;
-    wheelbaseM: number; // 2.20 - 2.95, step 0.05
-    trackWidthM: number; // 1.50 - 2.00, step 0.02
+    wheelbaseM: number;
+    trackWidthM: number;
     rollCage: RollCageSpec;
     ballastMassKg: number; // 0 - 100, step 5
     ballastPositionX: number; // -1.0 (Rear) to +1.0 (Front), step 0.05
@@ -85,12 +88,12 @@ export interface IVehicleBuildConfig {
   // Module 2: Engine & Powertrain
   engine: {
     layout: EngineLayout;
-    displacementL: number; // 1.3 - 6.2, step 0.1
+    displacementL: number;
     blockMaterial: BlockMaterial;
     aspiration: AspirationType;
     turboBoostBar: number; // 0.3 - 2.5, step 0.1
     camshaftProfile: number; // 0.0 - 1.0, step 0.1
-    revLimiterRpm: number; // 5500 - 10000, step 250
+    revLimiterRpm: number;
     exhaustMaterial: ExhaustMaterial;
     ecuTune: EcuTuneMap;
   };
@@ -193,7 +196,7 @@ export interface IEngineeringWarning {
 export interface ICompiledVehicle {
   build: IVehicleBuildConfig;
   chassisName: string;
-  bodyStyle: 'coupe' | 'wedge' | 'hatch' | 'prototype';
+  bodyStyle: ChassisBodyStyle;
 
   // Mass & Inertia
   dryMassKg: number;
@@ -223,6 +226,7 @@ export interface ICompiledVehicle {
   steeringWheelLocal: Vec3;
   hoodCamLocal: Vec3;
   collisionHull: IVehicleCollisionHull;
+  steeringLockDeg: number;
 
   // Powertrain & Gearbox
   idleRpm: number;
@@ -423,6 +427,14 @@ export interface IVehicleRuntimeState {
   lapValid: boolean;
 }
 
+export const VEHICLE_TUNING_LIMITS = {
+  wheelbaseM: { min: 2.0, max: 3.2 },
+  trackWidthM: { min: 1.3, max: 2.0 },
+  displacementL: { min: 0.6, max: 6.2 },
+  revLimiterRpm: { min: 3750, max: 10000 },
+  tireWidthMm: { min: 155, max: 345 },
+};
+
 export const VehicleBuildConfigSchema = z.object({
   id: z.string().min(1).max(80),
   name: z.string().min(1).max(80),
@@ -435,20 +447,20 @@ export const VehicleBuildConfigSchema = z.object({
   chassis: z.object({
     drivetrain: z.enum(['FF', 'FR', 'MR', 'RR', 'AWD']),
     frameMaterial: z.enum(['Mild Steel', 'Chromoly', 'Aluminum', 'Carbon Monocoque']),
-    wheelbaseM: z.number().min(2.2).max(2.95),
-    trackWidthM: z.number().min(1.5).max(2.0),
+    wheelbaseM: z.number().min(VEHICLE_TUNING_LIMITS.wheelbaseM.min).max(VEHICLE_TUNING_LIMITS.wheelbaseM.max),
+    trackWidthM: z.number().min(VEHICLE_TUNING_LIMITS.trackWidthM.min).max(VEHICLE_TUNING_LIMITS.trackWidthM.max),
     rollCage: z.enum(['None', 'Half-Cage', 'Full FIA Welded']),
     ballastMassKg: z.number().min(0).max(100),
     ballastPositionX: z.number().min(-1).max(1),
   }),
   engine: z.object({
-    layout: z.enum(['I4', 'Flat-4', 'I6', 'V6', 'V8', 'Rotary']),
-    displacementL: z.number().min(1.3).max(6.2),
+    layout: z.enum(['I3', 'I4', 'I4 Diesel', 'Flat-4', 'I6', 'V6', 'V8', 'Rotary']),
+    displacementL: z.number().min(VEHICLE_TUNING_LIMITS.displacementL.min).max(VEHICLE_TUNING_LIMITS.displacementL.max),
     blockMaterial: z.enum(['Cast Iron', 'Aluminum Alloy', 'Billet Magnesium']),
     aspiration: z.enum(['Naturally Aspirated', 'Single Turbo', 'Twin-Turbo', 'Supercharger']),
     turboBoostBar: z.number().min(0.0).max(2.5),
     camshaftProfile: z.number().min(0.0).max(1.0),
-    revLimiterRpm: z.number().min(5500).max(10000),
+    revLimiterRpm: z.number().min(VEHICLE_TUNING_LIMITS.revLimiterRpm.min).max(VEHICLE_TUNING_LIMITS.revLimiterRpm.max),
     exhaustMaterial: z.enum(['Steel', 'Stainless', 'Titanium', 'Inconel']),
     ecuTune: z.enum(['Eco / Endurance', 'Balanced', 'Qualifying Attack']),
   }),
@@ -482,8 +494,8 @@ export const VehicleBuildConfigSchema = z.object({
   wheelsAndTires: z.object({
     rimMaterial: z.enum(['Steel', 'Cast Alloy', 'Forged Alloy', 'Magnesium', 'Carbon']),
     rimDiameterIn: z.number().min(15).max(20),
-    tireWidthFrontMm: z.number().min(195).max(345),
-    tireWidthRearMm: z.number().min(195).max(345),
+    tireWidthFrontMm: z.number().min(VEHICLE_TUNING_LIMITS.tireWidthMm.min).max(VEHICLE_TUNING_LIMITS.tireWidthMm.max),
+    tireWidthRearMm: z.number().min(VEHICLE_TUNING_LIMITS.tireWidthMm.min).max(VEHICLE_TUNING_LIMITS.tireWidthMm.max),
     sidewallProfilePct: z.number().min(30).max(60),
     tireCompound: z.enum(['Street', 'Semi-Slick', 'Hard Slick', 'Med Slick', 'Soft Slick', 'Wet']),
     coldPressurePsi: z.number().min(20).max(38),

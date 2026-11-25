@@ -14,9 +14,21 @@ interface SliderSpec {
   label: string;
   unit: string;
   desc: string;
+  min?: number;
+  max?: number;
 }
 
 const SLIDERS: SliderSpec[] = [
+  { key: 'driving_pace', label: 'Driving Pace', unit: '×', min: 0.6, max: 1,
+    desc: 'Lower values give drivers more real time to react at every indicated mph. The speedometer, top speed and lap clock still use simulated time.' },
+  { key: 'steering_response', label: 'Steering Response', unit: '×', min: 0.85, max: 1.4,
+    desc: 'Higher values make keyboard turn-in quicker and give more steering through medium-speed corners. Very high values can scrub the front tires.' },
+  { key: 'drift_forgiveness', label: 'Drift Forgiveness', unit: '', min: 0, max: 1,
+    desc: 'Raise this to soften rear grip loss when pulling the handbrake and make slides easier to catch in Beginner and Sport.' },
+  { key: 'traction_assist', label: 'Traction Assist', unit: '', min: 0, max: 1,
+    desc: 'Higher values trim power sooner when the driven wheels spin. Drift mode allows more slip. Pro keeps traction control off.' },
+  { key: 'impact_damage_mult', label: 'Impact Damage', unit: '×',
+    desc: 'Raises the damage added by each collision. Glancing contact still wears the car down progressively.' },
   {
     key: 'pacejka_grip_mult',
     label: 'Pacejka Tire Grip Multiplier',
@@ -185,7 +197,7 @@ export function PhysicsTab({ baseline, staged, onChange }: PhysicsTabProps) {
           <div className="flex items-center justify-between">
             <div>
               <h3 className="text-xs font-bold uppercase tracking-wider text-slate-200">
-                Global Physics Math Biases
+                Driving Feel & Physics
               </h3>
               <p className="text-[11px] text-slate-400 mt-0.5">
                 Modifying any bias auto-bumps <code className="text-[#F59E0B]">version_id</code> to
@@ -222,7 +234,7 @@ export function PhysicsTab({ baseline, staged, onChange }: PhysicsTabProps) {
                     <div className="flex items-center gap-2 font-mono text-xs">
                       {isModified && (
                         <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#F59E0B]/15 text-[#F59E0B]">
-                          {baseVal.toFixed(2)}x →
+                          {baseVal.toFixed(2)}{spec.unit} →
                         </span>
                       )}
                       <span
@@ -233,21 +245,21 @@ export function PhysicsTab({ baseline, staged, onChange }: PhysicsTabProps) {
                       </span>
                     </div>
                   </div>
-                  <p className="text-[11px] text-slate-500 mt-0.5 mb-2">{spec.desc}</p>
+                  <p id={`physics-${spec.key}`} className="mt-0.5 mb-2 text-[11px] text-slate-400">{spec.desc}</p>
                   <input
                     type="range"
-                    min={0.5}
-                    max={2.0}
+                    aria-label={spec.label}
+                    aria-describedby={`physics-${spec.key}`}
+                    min={spec.min ?? 0.5}
+                    max={spec.max ?? 2.0}
                     step={0.01}
                     value={val}
                     onChange={(e) => updateField(spec.key, Number.parseFloat(e.target.value))}
                     className="w-full accent-[#00F0FF] cursor-pointer"
                   />
                   <div className="flex justify-between text-[10px] font-mono text-slate-500 mt-1">
-                    <span>0.50x</span>
-                    <span>1.00x</span>
-                    <span>1.50x</span>
-                    <span>2.00x</span>
+                    <span>{(spec.min ?? 0.5).toFixed(2)}{spec.unit}</span>
+                    <span>{(spec.max ?? 2).toFixed(2)}{spec.unit}</span>
                   </div>
                 </div>
               );

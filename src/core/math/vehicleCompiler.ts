@@ -47,7 +47,9 @@ const ENGINE_LAYOUT_SPECS: Record<
   IVehicleBuildConfig['engine']['layout'],
   { massMult: number; cgDeltaY: number; torquePerLiterNm: number; baseRedline: number; fuelMult: number }
 > = {
+  I3: { massMult: 0.66, cgDeltaY: 0, torquePerLiterNm: 102, baseRedline: 6800, fuelMult: 0.82 },
   I4: { massMult: 0.9, cgDeltaY: 0.0, torquePerLiterNm: 102, baseRedline: 7600, fuelMult: 0.92 },
+  'I4 Diesel': { massMult: 1.03, cgDeltaY: 0.02, torquePerLiterNm: 87, baseRedline: 4100, fuelMult: 0.82 },
   'Flat-4': { massMult: 0.95, cgDeltaY: -0.045, torquePerLiterNm: 93, baseRedline: 7200, fuelMult: 0.96 },
   I6: { massMult: 1.12, cgDeltaY: 0.015, torquePerLiterNm: 108, baseRedline: 7800, fuelMult: 1.02 },
   V6: { massMult: 1.06, cgDeltaY: 0.005, torquePerLiterNm: 112, baseRedline: 8200, fuelMult: 1.0 },
@@ -93,8 +95,9 @@ export function compileVehicleBuild(
   balanceConfig: IGlobalBalanceConfig
 ): ICompiledVehicle {
   const chassis = CHASSIS_BY_ID.get(build.chassisId) ?? CHASSIS_CATALOG[0];
+  const roadGeometry = chassis.roadGeometry;
 
-  const getPart = (id: string) => PARTS_BY_ID.get(id);
+  const getPart = (id?: string) => id ? PARTS_BY_ID.get(id) : undefined;
   const blockPart = getPart(build.equippedPartIds.engineBlockId);
   const aspPart = getPart(build.equippedPartIds.aspirationId);
   const exhPart = getPart(build.equippedPartIds.exhaustId);
@@ -110,6 +113,8 @@ export function compileVehicleBuild(
   const diffAeroPart = getPart(build.equippedPartIds.rearDiffuserId);
   const wingPart = getPart(build.equippedPartIds.rearWingId);
   const radPart = getPart(build.equippedPartIds.radiatorId);
+  const padPart = getPart(build.equippedPartIds.brakePadId);
+  const oilCooler = getPart(build.equippedPartIds.oilCoolerId);
 
   const layoutSpec = ENGINE_LAYOUT_SPECS[build.engine.layout];
   const drvSpec = DRIVETRAIN_LOSS[build.chassis.drivetrain];
@@ -128,7 +133,7 @@ export function compileVehicleBuild(
     (splitPart?.modifiers.massKg ?? 0) +
     (diffAeroPart?.modifiers.massKg ?? 0) +
     (wingPart?.modifiers.massKg ?? 0);
-  const radiatorMass = radPart?.modifiers.massKg ?? 12;
+  const radiatorMass = (radPart?.modifiers.massKg ?? 12) + (oilCooler?.modifiers.massKg ?? 0);
 
   const rimRadiusM = (build.wheelsAndTires.rimDiameterIn * 0.0254) / 2;
   const sidewallFrontM = (build.wheelsAndTires.tireWidthFrontMm / 1000) * (build.wheelsAndTires.sidewallProfilePct / 100);
@@ -183,7 +188,7 @@ export function compileVehicleBuild(
   }
 
   const weightedZ =
-    (frameMass + bodyMass) * 0.0 +
+    (frameMass + bodyMass) * (roadGeometry?.chassisCgZ ?? 0) +
     (engineCoreMass + aspirationMass) * engineZ +
     radiatorMass * (halfWb * 0.92) +
     exhaustMass * (-halfWb * 0.75) +
@@ -227,7 +232,8 @@ export function compileVehicleBuild(
     (susPart?.modifiers.rigidityMultiplier ?? 1.0);
 
   // 2. Dyno Curve & Powertrain
-  const idleRpm = build.engine.layout === 'Rotary' ? 1150 : 900;
+  const diesel = build.engine.layout === 'I4 Diesel';
+  const idleRpm = diesel ? 800 : build.engine.layout === 'Rotary' ? 1150 : 900;
   const revLimiterRpm = build.engine.revLimiterRpm;
   const redlineRpm = Math.max(idleRpm + 2000, revLimiterRpm - 350);
 
@@ -238,7 +244,9 @@ export function compileVehicleBuild(
   const exhPowerMult = exhPart?.modifiers.powerMultiplier ?? 1.0;
 
   const cam = build.engine.camshaftProfile; // 0..1
-  const optimalTorqueRpm = 3400 + cam * 3100 + (build.engine.layout === 'Rotary' ? 1200 : 0);
+  const optimalTorqueRpm = diesel
+    ? 2050 + cam * 700
+    : 3400 + cam * 3100 + (build.engine.layout === 'Rotary' ? 1200 : 0);
 
   const dynoCurve: IDynoPoint[] = [];
   let peakTorqueNm = 0;
@@ -247,7 +255,7 @@ export function compileVehicleBuild(
   let peakPowerRpm = idleRpm;
 
   for (let rpm = 1000; rpm <= revLimiterRpm; rpm += 250) {
-    const rpmNorm = (rpm - optimalTorqueRpm) / 2900;
+    const rpmNorm = (rpm - optimalTorqueRpm) / (diesel ? 2100 : 2900);
     const volumetricEff = Math.max(
       0.52,
       1.04 - 0.28 * rpmNorm * rpmNorm + cam * 0.08 * ((rpm - 4500) / 4000) - (1 - cam) * 0.06 * ((rpm - 5500) / 3500)
@@ -255,8 +263,8 @@ export function compileVehicleBuild(
 
     let boostAtRpm = 0;
     if (build.engine.aspiration === 'Single Turbo') {
-      const spoolThreshold = 3400 + maxBoostBar * 450;
-      const spoolFactor = 1 / (1 + Math.exp(-(rpm - spoolThreshold) / 520));
+      const spoolThreshold = diesel ? 1350 + maxBoostBar * 200 : 3400 + maxBoostBar * 450;
+      const spoolFactor = 1 / (1 + Math.exp(-(rpm - spoolThreshold) / (diesel ? 250 : 520)));
       boostAtRpm = maxBoostBar * spoolFactor;
     } else if (build.engine.aspiration === 'Twin-Turbo') {
       const spoolThreshold = 2550 + maxBoostBar * 320;
@@ -330,6 +338,7 @@ export function compileVehicleBuild(
       (diffAeroPart?.modifiers.dragCdDelta ?? 0) +
       (wingPart?.modifiers.dragCdDelta ?? 0) * (0.45 + 0.75 * (build.aero.wingAngleDeg / 20)) +
       (radPart?.modifiers.dragCdDelta ?? 0) +
+      (oilCooler?.modifiers.dragCdDelta ?? 0) +
       brakeDuctDrag
   );
 
@@ -353,7 +362,7 @@ export function compileVehicleBuild(
   const pacejkaC = 1.32 + sidewallNorm * 0.16;
   const pacejkaE = -0.55 + sidewallNorm * 0.35;
 
-  const baseCaliperTorque = (calPart?.modifiers.brakeTorqueNm ?? 3000) * rotorSizeScale;
+  const baseCaliperTorque = ((calPart?.modifiers.brakeTorqueNm ?? 3000) + (padPart?.modifiers.brakeTorqueNm ?? 0)) * rotorSizeScale;
   const biasFront = build.brakes.brakeBiasFrontPct / 100;
   const maxBrakeTorquePerAxleFrontNm = baseCaliperTorque * 2 * biasFront;
   const maxBrakeTorquePerAxleRearNm = baseCaliperTorque * 2 * (1 - biasFront);
@@ -383,8 +392,15 @@ export function compileVehicleBuild(
     { x: -halfTrack, y: wheelRadiusRearM + 0.04, z: -halfWb }, // RR
   ];
 
+  const axleDelta = halfWb - chassis.baseWheelbaseM / 2;
   const scaledHardpoints = {
     ...chassis.hardpoints,
+    ...(roadGeometry && {
+      frontSplitter: { ...chassis.hardpoints.frontSplitter, z: chassis.hardpoints.frontSplitter.z + axleDelta },
+      radiator: { ...chassis.hardpoints.radiator, z: chassis.hardpoints.radiator.z + axleDelta },
+      rearDiffuser: { ...chassis.hardpoints.rearDiffuser, z: chassis.hardpoints.rearDiffuser.z - axleDelta },
+      rearWing: { ...chassis.hardpoints.rearWing, z: chassis.hardpoints.rearWing.z - axleDelta },
+    }),
     engineBay: { x: 0, y: chassis.hardpoints.engineBay.y + layoutSpec.cgDeltaY, z: engineZ },
     wheelFL: wheelPositionsLocal[0],
     wheelFR: wheelPositionsLocal[1],
@@ -393,7 +409,7 @@ export function compileVehicleBuild(
   };
 
   // 6. Thermals
-  const radiatorCoolingKw = radPart?.modifiers.coolingCapacityKw ?? 64;
+  const radiatorCoolingKw = (radPart?.modifiers.coolingCapacityKw ?? 64) + (oilCooler?.modifiers.coolingCapacityKw ?? 0);
   const engineMaxSafeTempC = blockPart?.modifiers.maxSafeTempC ?? 116;
   const engineHeatMultiplier =
     (blockPart?.modifiers.heatGenerationMultiplier ?? 1.0) *
@@ -517,22 +533,32 @@ export function compileVehicleBuild(
     (splitPart?.price ?? 0) +
     (diffAeroPart?.price ?? 0) +
     (wingPart?.price ?? 0) +
-    (radPart?.price ?? 0);
+    (radPart?.price ?? 0) + (padPart?.price ?? 0) + (oilCooler?.price ?? 0);
 
   const estimatedBuildValueCredits = Math.round(rawPartsSum * balanceConfig.economy_bias.part_price_mult);
 
-  const anchors = CHASSIS_COCKPIT_ANCHORS[chassis.id] ?? {
+  const anchors = roadGeometry ? {
+    cockpitEyeLocal: roadGeometry.eye,
+    steeringWheelLocal: roadGeometry.steeringWheel,
+    hoodCamLocal: roadGeometry.hoodCam,
+  } : (CHASSIS_COCKPIT_ANCHORS[chassis.id] ?? {
     cockpitEyeLocal: { x: 0.34, y: 1.06, z: -0.08 },
     steeringWheelLocal: { x: 0.34, y: 0.84, z: 0.38 },
     hoodCamLocal: { x: 0.0, y: 1.10, z: 0.72 },
-  };
+  });
+  const hullHalfHeight = roadGeometry ? (roadGeometry.collisionTopM - roadGeometry.collisionBottomM) / 2 : 0.34;
+  const hullHalfLength = roadGeometry ? halfWb + (roadGeometry.frontOverhangM + roadGeometry.rearOverhangM) / 2 : wheelbaseM * 0.76;
   const collisionHull: IVehicleCollisionHull = {
     halfExtents: {
       x: trackWidthM * 0.44,
-      y: 0.34,
-      z: wheelbaseM * 0.76,
+      y: hullHalfHeight,
+      z: hullHalfLength,
     },
-    localOffset: { x: 0, y: 0.64, z: 0 },
+    localOffset: {
+      x: 0,
+      y: roadGeometry ? roadGeometry.collisionBottomM + hullHalfHeight : 0.64,
+      z: roadGeometry ? (roadGeometry.frontOverhangM - roadGeometry.rearOverhangM) / 2 : 0,
+    },
     friction: 0.15,
     restitution: 0.12,
   };
@@ -564,6 +590,7 @@ export function compileVehicleBuild(
     steeringWheelLocal: anchors.steeringWheelLocal,
     hoodCamLocal: anchors.hoodCamLocal,
     collisionHull,
+    steeringLockDeg: roadGeometry?.steeringLockDeg ?? 30,
     idleRpm,
     redlineRpm,
     revLimiterRpm,
@@ -595,8 +622,8 @@ export function compileVehicleBuild(
     pacejkaE,
     maxBrakeTorquePerAxleFrontNm,
     maxBrakeTorquePerAxleRearNm,
-    brakeMaxSafeTempC: rotorPart?.modifiers.maxSafeTempC ?? 700,
-    brakeColdBiteFactor: rotorPart?.modifiers.coldBiteFactor ?? 1.0,
+    brakeMaxSafeTempC: (rotorPart?.modifiers.maxSafeTempC ?? 700) + (padPart?.modifiers.brakeFadeThresholdDeltaC ?? 0),
+    brakeColdBiteFactor: (rotorPart?.modifiers.coldBiteFactor ?? 1) * (padPart?.modifiers.coldBiteFactor ?? 1),
     radiatorCoolingKw,
     engineThermalCapacityJPerC: 18500,
     engineMaxSafeTempC,

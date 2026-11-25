@@ -80,3 +80,26 @@
   5. Executed live Cloudflare `workerd` end-to-end API suite: verified `Cache-Control: public, max-age=60` on `/api/config/public`, 6-digit Email OTP + 30-day `HttpOnly` cookie, `403 Forbidden` non-admin gate vs `200 OK` Dual-Gate `/api/admin/config`, atomic D1 shop & lap credit transactions, automatic `version_id` bump + leaderboard partitioning on `physics_bias` publish, live `HTMLRewriter` `<title>` injection on `GET /`, and 1-click snapshot rollback.
   6. Executed 1,200-step (10s @ 120Hz) cross-worker simulation test (`track-generator` + `physics-rapier` + `powertrain` + `aerodynamics` + `vehicle-solver` + `thermals` + `ai-test-driver`): verified 7,680-triangle banked trimesh, smooth gear shifts to 3rd gear (`111.6 km/h`), `898 N` downforce, realistic engine/tire/brake heating & fuel burn, and `0.2m` lateral tracking precision.
 * **Next Immediate Action:** Ready for local interactive playtesting (`npm run dev`) and Cloudflare production provisioning/deployment (`SETUP.md`).
+
+### 2026-11-25 — Garage, cockpit and driving feel
+
+**Plan.** Separate car and course selection, add confirmed deletion through local and cloud garage storage, fit a shared cockpit to each chassis, and tune the existing fixed-step driving and damage systems through Admin → Physics.
+
+- The chassis picker renders one selected factory model at a time. Garage → Choose course opens a second screen for route and mode selection.
+- Saved builds can be deleted after confirmation. Signed-in deletions are scoped to the owner's D1 rows. The next available car becomes active and a fresh factory Apex is available if the final car is removed. Existing lap rows and owned parts are preserved.
+- The shared cockpit uses each chassis's driver eye point and has a live speed, gear and RPM display. Normal, F1, GT flat-bottom, Rally deep dish and Yoke wheels ship with shape previews in Settings → Camera.
+- Driving pace defaults to 0.78× real time with the same fixed simulation step, speedometer and simulated lap clock. Admin → Physics includes bounded controls and descriptions for pace, steering response, drift forgiveness, traction assist and collision damage. Physics and rules version 2.1.0 keep new laps in the correct partition.
+- Wall impacts apply progressive damage and emit a brief smoke burst from the affected area using the existing particle pool.
+
+**Verified.** The production build, replay smoke test and Wrangler deployment dry run passed. Chrome checks covered desktop and narrow-screen chassis previews, deletion confirmation and persistence after reload, course selection, the F1 wheel, live cockpit readings and wall-hit wear. A disposable local Worker fixture verified owner-scoped deletion, active-car replacement, intact ownership and lap history, and Admin publishing with a new balance version. A smoke fixture verified one burst per impact and particle cleanup. A steering fixture verified stronger medium-speed response and Beginner slide recovery with countersteer disabled in Pro.
+
+**Release status.** The changes are in the local workspace. The existing `modulus` Worker, D1, KV and custom domain are the deployment targets. This change adds no database migration. Production rollout and full-course drift balance remain open.
+
+### 2026-11-25 — Full pace, cockpit telemetry and Lab parts
+
+- Restored 100% real-time pace for stock balance configs and advanced the racing ruleset to 2.2.0. Published custom balance values continue to apply.
+- Added Brake Pad and Oil Cooler slots with six purchasable upgrades. Beginner Lab now also offers paint, ride-height presets, fuel load, and tire purchases. Advanced exposes the new slots under Brakes and Cooling.
+- Enlarged the cockpit wheel and added tire and brake temperatures, fuel, engine temperature, and a track-position minimap. Upshifts and downshifts briefly move the camera, with Reduced Motion disabling the kick.
+- Added Hide top HUD in the drive toolbar and a persistent toggle in Settings. The hidden view keeps a restore button and access to Finish run during drift sessions.
+
+**Verified.** The production build passed. A short Chrome check covered the Beginner Lab additions, cockpit displays and HUD hide and restore. Production rollout is pending.

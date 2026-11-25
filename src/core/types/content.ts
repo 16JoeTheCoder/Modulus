@@ -5,7 +5,7 @@ export type DrivetrainLayout = 'FF' | 'FR' | 'MR' | 'RR' | 'AWD';
 export type FrameMaterial = 'Mild Steel' | 'Chromoly' | 'Aluminum' | 'Carbon Monocoque';
 export type RollCageSpec = 'None' | 'Half-Cage' | 'Full FIA Welded';
 
-export type EngineLayout = 'I4' | 'Flat-4' | 'I6' | 'V6' | 'V8' | 'Rotary';
+export type EngineLayout = 'I3' | 'I4' | 'I4 Diesel' | 'Flat-4' | 'I6' | 'V6' | 'V8' | 'Rotary';
 export type BlockMaterial = 'Cast Iron' | 'Aluminum Alloy' | 'Billet Magnesium';
 export type AspirationType = 'Naturally Aspirated' | 'Single Turbo' | 'Twin-Turbo' | 'Supercharger';
 export type ExhaustMaterial = 'Steel' | 'Stainless' | 'Titanium' | 'Inconel';
@@ -66,6 +66,9 @@ export interface IHardpointMap {
   wheelRR: Vec3;
 }
 
+export type ChassisBodyStyle = 'coupe' | 'wedge' | 'hatch' | 'prototype' | 'microcar' |
+  'sedan' | 'minivan' | 'pickup' | 'wagon' | 'roadster' | 'muscle';
+
 export interface IChassisSchema {
   id: string;
   name: string;
@@ -81,7 +84,18 @@ export interface IChassisSchema {
   baseFrontalAreaM2: number;
   baseDragCd: number;
   baseTorsionalRigidityNmDeg: number;
-  bodyStyle: 'coupe' | 'wedge' | 'hatch' | 'prototype';
+  bodyStyle: ChassisBodyStyle;
+  roadGeometry?: {
+    frontOverhangM: number;
+    rearOverhangM: number;
+    collisionBottomM: number;
+    collisionTopM: number;
+    eye: Vec3;
+    steeringWheel: Vec3;
+    hoodCam: Vec3;
+    steeringLockDeg: number;
+    chassisCgZ: number;
+  };
   primaryColorHex: string;
   accentColorHex: string;
   hardpoints: IHardpointMap;
@@ -109,6 +123,7 @@ export interface IPartStatsModifier {
   wearRateMultiplier?: number;
   wetGripMultiplier?: number;
   brakeTorqueNm?: number;
+  brakeFadeThresholdDeltaC?: number;
   maxSafeTempC?: number;
   coldBiteFactor?: number;
   minRimDiameterIn?: number;

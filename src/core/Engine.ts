@@ -355,7 +355,8 @@ export class ModulusEngine implements IEngineContext {
       this.lastFrameTimeMs = nowMs;
 
       if (this.visualMode === 'track' && !this.simulationPaused) {
-        this.accumulatorS += rawDtS;
+        // Advance fewer fixed ticks per wall second while preserving simulated mph and lap timing.
+        this.accumulatorS += rawDtS * this.balanceConfig.physics_bias.driving_pace;
         let substeps = 0;
         while (this.accumulatorS >= FIXED_DT && substeps < MAX_SUBSTEPS_PER_FRAME) {
           this.stepSingleFixedTick(FIXED_DT);

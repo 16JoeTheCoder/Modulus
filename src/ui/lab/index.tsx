@@ -14,7 +14,6 @@ import {
   Gauge,
   Layers,
   Play,
-  Plus,
   Save,
   Settings,
   Shield,
@@ -24,7 +23,7 @@ import {
   Wind,
   Wrench,
 } from 'lucide-react';
-import { createStarterBuild } from '../../content';
+import { NewCarPicker } from '../garage/NewCarPicker';
 import type { ModulusEngine } from '../../core/Engine';
 import type { StorageSync } from '../../core/StorageSync';
 import type {
@@ -160,14 +159,7 @@ export function EngineeringLab({
     setTimeout(() => setSaveToast(null), 2200);
   };
 
-  const handleCreateNewBuild = () => {
-    const base = createStarterBuild();
-    const id = `build_${Date.now().toString(36)}`;
-    const next: IVehicleBuildConfig = {
-      ...base,
-      id,
-      name: `Custom Spec #${savedBuilds.length + 1}`,
-    };
+  const handleCreateNewBuild = (next: IVehicleBuildConfig) => {
     engine.updateBuild(next);
     setSavedBuilds([...storage.getGarageState().savedBuilds]);
   };
@@ -245,14 +237,13 @@ export function EngineeringLab({
               className="hidden w-36 rounded-md border border-slate-800 bg-slate-950/70 px-2 py-1 text-xs text-slate-200 focus:border-cyan-400 focus:outline-none lg:block"
             />
 
-            <button
-              type="button"
-              onClick={handleCreateNewBuild}
-              title="New Build"
+            <NewCarPicker
+              storage={storage}
+              priceMultiplier={balanceConfig.economy_bias.part_price_mult}
+              onCreate={handleCreateNewBuild}
+              compact
               className="rounded-md border border-slate-700/80 bg-slate-900/80 p-1.5 text-slate-300 transition hover:border-cyan-400 hover:text-cyan-300"
-            >
-              <Plus className="h-3.5 w-3.5" />
-            </button>
+            />
 
             <button
               type="button"
@@ -392,6 +383,7 @@ export function EngineeringLab({
                   balanceConfig={balanceConfig}
                   speedUnit={settings.speedUnit}
                   isOwned={isOwned}
+                  onPurchase={(id) => storage.purchaseItem(id)}
                   onChangeBuild={handleUpdateBuild}
                   onSwitchToAdvanced={() => updatePlayerSettings({ labMode: 'advanced' })}
                 />
@@ -589,11 +581,11 @@ export function EngineeringLab({
 
           <button
             type="button"
-            onClick={() => handleLaunch(false)}
+            onClick={() => setCircuitModalOpen(true)}
             className="flex items-center gap-1.5 rounded-lg bg-cyan-400 px-4 py-1.5 text-xs font-black uppercase tracking-wider text-slate-950 shadow-[0_0_20px_rgba(0,240,255,0.3)] transition hover:bg-cyan-300"
           >
             <Play className="h-3.5 w-3.5 fill-current" />
-            <span>Drive on Track</span>
+            <span>Choose course</span>
           </button>
         </div>
       </footer>
@@ -601,7 +593,7 @@ export function EngineeringLab({
       <CircuitModal
         open={circuitModalOpen}
         onClose={() => setCircuitModalOpen(false)}
-        engine={engine}
+        buildName={compiled.build.name}
         storage={storage}
         activeTrackId={activeTrack.id}
         balanceVersionId={balanceConfig.version_id}

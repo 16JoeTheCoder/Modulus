@@ -52,6 +52,9 @@ class FxRendererController implements IModulusPlugin {
   private impactShakeAmp = 0;
   private impactShakeTime = 0;
   private lastImpactSeq = -1;
+  private lastForwardGear = 0;
+  private shiftKick = 0;
+  private shiftAge = 0;
 
   // Reusable scratch math objects
   private readonly prevPos = new THREE.Vector3();
@@ -123,6 +126,8 @@ class FxRendererController implements IModulusPlugin {
       ctx.events.on('vehicle:reset', () => {
         this.surfaceFx?.clear();
         this.chaseInitialized = false;
+        this.lastForwardGear = 0;
+        this.shiftKick = 0;
       }),
       ctx.events.on('camera:preset', ({ preset }) => {
         this.onCameraPresetChanged(preset);
@@ -208,6 +213,8 @@ class FxRendererController implements IModulusPlugin {
       this.surfaceFx.group.visible = mode === 'track';
     }
     if (mode === 'lab') {
+      this.lastForwardGear = 0;
+      this.shiftKick = 0;
       this.targetOrbitDist = 5.4;
       this.targetOrbitPitch = 0.27;
       this.smoothedFov = 46;
@@ -429,6 +436,21 @@ class FxRendererController implements IModulusPlugin {
       this.smoothedFov += (targetFov - this.smoothedFov) * (1 - Math.exp(-dt * 6.0));
       cam.fov = this.smoothedFov;
       cam.updateProjectionMatrix();
+    }
+
+    if (snap.gear > 0 && this.lastForwardGear > 0 && snap.gear !== this.lastForwardGear) {
+      this.shiftKick = Math.sign(snap.gear - this.lastForwardGear);
+      this.shiftAge = 0;
+    }
+    this.lastForwardGear = Math.max(0, snap.gear);
+    if (this.shiftKick !== 0) {
+      this.shiftAge += dt;
+      const age = Math.min(1, this.shiftAge / 0.19);
+      const kick = this.shiftKick * Math.sin(age * Math.PI * 2.25) * (1 - age) ** 2 * motionScale;
+      cam.translateZ(kick * 0.055);
+      cam.translateY(Math.abs(kick) * 0.016);
+      cam.rotateX(kick * 0.018);
+      if (age === 1) this.shiftKick = 0;
     }
 
     // Update car-following directional sun shadow frustum & camera-centered sky dome

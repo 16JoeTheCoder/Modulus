@@ -2,6 +2,7 @@ import { STARTER_OWNED_PART_IDS } from '../../src/content';
 import {
   DEFAULT_BALANCE_CONFIG,
   GlobalBalanceConfigSchema,
+  migrateStockDrivingPace,
   type IAuthUser,
   type IGarageSyncResponse,
   type IGlobalBalanceConfig,
@@ -18,7 +19,7 @@ export async function getActiveBalanceConfig(env: Env): Promise<IGlobalBalanceCo
     if (raw) {
       const parsed = GlobalBalanceConfigSchema.safeParse(raw);
       if (parsed.success) {
-        return parsed.data;
+        return migrateStockDrivingPace(parsed.data);
       }
     }
   } catch (err) {

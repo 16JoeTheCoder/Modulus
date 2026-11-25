@@ -18,8 +18,8 @@ export const FIXED_SIM_DT = 1 / FIXED_SIM_HZ;
 
 export const CURRENT_BUILD_SCHEMA_VERSION = 2 as const;
 export const LEGACY_BUILD_SCHEMA_VERSION = 1 as const;
-export const CURRENT_PHYSICS_VERSION = 'phys-2.0.0' as const;
-export const CURRENT_RULESET_VERSION = 'rules-2.0.0' as const;
+export const CURRENT_PHYSICS_VERSION = 'phys-2.1.0' as const;
+export const CURRENT_RULESET_VERSION = 'rules-2.2.0' as const;
 export const DEFAULT_TRACK_VERSION = 'v1.0.0' as const;
 
 export interface Vec3 {

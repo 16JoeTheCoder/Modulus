@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Camera, Gamepad2, RotateCcw, Sliders, Volume2, VolumeX, X } from 'lucide-react';
+import { STEERING_WHEELS, type SteeringWheelStyle } from '../steeringWheels';
 import type { AssistPreset, TransmissionMode } from '../../contracts/simulation';
 import {
   formatKeyCodeLabel,
@@ -128,6 +129,29 @@ export function SettingsModal({ open, settings, onClose }: ISettingsModalProps) 
         <div className="flex-1 space-y-4 overflow-y-auto p-5">
           {tab === 'camera' && (
             <>
+              <fieldset className="space-y-2">
+                <legend className="text-xs font-semibold text-slate-200">Cockpit steering wheel</legend>
+                <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
+                  {(Object.keys(STEERING_WHEELS) as SteeringWheelStyle[]).map((id) => {
+                    const wheel = STEERING_WHEELS[id];
+                    const points = wheel.outline.map(([x, y]) => `${x},${-y}`).join(' ');
+                    const Outline = wheel.closed ? 'polygon' : 'polyline';
+                    return (
+                      <button key={id} type="button" aria-pressed={settings.steeringWheel === id}
+                        onClick={() => updatePlayerSettings({ steeringWheel: id })}
+                        className="flex flex-col items-center gap-1 rounded-lg border border-slate-700 px-1 py-2 text-xs text-slate-300 hover:border-slate-400 aria-pressed:border-cyan-400 aria-pressed:bg-cyan-400/10 aria-pressed:text-cyan-200">
+                        <svg viewBox="-1.25 -1.18 2.5 2.36" aria-hidden="true" className="h-10 w-12" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round">
+                          <Outline points={points} strokeWidth="0.15" />
+                          {wheel.spokes.map(([x, y]) => <line key={`${x},${y}`} x1="0" y1="0" x2={x} y2={-y} strokeWidth="0.10" />)}
+                          <circle r="0.23" fill="currentColor" stroke="none" />
+                        </svg>
+                        {wheel.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </fieldset>
+
               <div className="space-y-2">
                 <div className="text-xs font-semibold uppercase tracking-wider text-slate-300">
                   Default Driving View
@@ -185,6 +209,16 @@ export function SettingsModal({ open, settings, onClose }: ISettingsModalProps) 
                   ))}
                 </div>
               </div>
+
+              <label className="flex cursor-pointer items-center justify-between gap-4 rounded-xl border border-slate-800 bg-slate-900/60 px-3.5 py-2.5">
+                <span>
+                  <span className="block text-xs font-semibold text-slate-200">Show top driving HUD</span>
+                  <span className="block text-[10px] text-slate-400">Hide the toolbar, timing, drift score and alerts for a clearer windshield.</span>
+                </span>
+                <input type="checkbox" checked={settings.showTopHud}
+                  onChange={(event) => updatePlayerSettings({ showTopHud: event.target.checked })}
+                  className="h-4 w-4 shrink-0 accent-cyan-400" />
+              </label>
 
               <label className="flex cursor-pointer items-center justify-between rounded-xl border border-slate-800 bg-slate-900/60 px-3.5 py-2.5">
                 <div>

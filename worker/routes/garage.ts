@@ -116,6 +116,22 @@ publicAndGarageRoutes.post('/garage/build', requireAuth, async (c) => {
   return c.json({ ok: true, build: record });
 });
 
+publicAndGarageRoutes.delete('/garage/build/:id', requireAuth, async (c) => {
+  const userId = c.get('user')!.id;
+  const buildId = c.req.param('id');
+  if (!buildId || buildId.length > 80) return c.json({ error: 'Invalid build ID' }, 400);
+
+  await c.env.DB.batch([
+    c.env.DB.prepare('DELETE FROM builds WHERE id = ? AND user_id = ?').bind(buildId, userId),
+    c.env.DB.prepare(
+      `UPDATE builds SET is_active = 1 WHERE id = (
+         SELECT id FROM builds WHERE user_id = ? ORDER BY updated_at DESC, id DESC LIMIT 1
+       ) AND NOT EXISTS (SELECT 1 FROM builds WHERE user_id = ? AND is_active = 1)`
+    ).bind(userId, userId),
+  ]);
+  return c.json({ ok: true });
+});
+
 publicAndGarageRoutes.post('/shop/buy', requireAuth, async (c) => {
   const user = c.get('user')!;
   const body = await c.req.json().catch(() => null);

@@ -1,19 +1,17 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   ArrowLeftRight,
   Cloud,
   Copy,
   Flag,
-  Play,
-  Plus,
   Save,
   Settings,
   Shield,
   Sliders,
-  Trophy,
+  Trash2,
   Wrench,
 } from 'lucide-react';
-import { CHASSIS_BY_ID, createStarterBuild } from '../../content';
+import { CHASSIS_BY_ID } from '../../content';
 import { compileVehicleBuild } from '../../core/math/vehicleCompiler';
 import type { ModulusEngine } from '../../core/Engine';
 import type { StorageSync } from '../../core/StorageSync';
@@ -21,48 +19,30 @@ import type {
   IAuthUser,
   ICompiledVehicle,
   IGlobalBalanceConfig,
-  ITrackSplineSchema,
   IVehicleBuildConfig,
 } from '../../core/types';
-import type { SessionMode } from '../../contracts/simulation';
-import { getTrackVersion } from '../engineBridge';
 import {
   formatSpeedFromKph,
-  getTrackPersonalBest,
-  makePbPartitionKey,
   speedUnitLabel,
   type PlayerSettings,
 } from '../settingsStore';
-import { CURRENT_RULESET_VERSION } from '../../contracts/simulation';
-import { TrackPreviewSvg } from '../lab/TrackPreviewSvg';
+import { NewCarPicker } from './NewCarPicker';
 
 export interface IGarageHomeProps {
   engine: ModulusEngine;
   storage: StorageSync;
   compiled: ICompiledVehicle;
   savedBuilds: IVehicleBuildConfig[];
-  activeTrack: ITrackSplineSchema;
   balanceConfig: IGlobalBalanceConfig;
   credits: number;
   user: IAuthUser | null;
   settings: PlayerSettings;
-  sessionMode: SessionMode;
-  onChangeSessionMode: (mode: SessionMode) => void;
   onSelectBuild: (build: IVehicleBuildConfig) => void;
   onBuildsChanged: () => void;
   onOpenLab: (mode: 'beginner' | 'advanced') => void;
   onOpenCircuitModal: () => void;
   onOpenSettings: () => void;
   onOpenAuth: () => void;
-  onLaunchDrive: (aiEnabled: boolean) => void;
-}
-
-function formatTime(ms: number): string {
-  const clamped = Math.max(0, Math.round(ms));
-  const mins = Math.floor(clamped / 60000);
-  const secs = Math.floor((clamped % 60000) / 1000);
-  const millis = clamped % 1000;
-  return `${mins}:${secs.toString().padStart(2, '0')}.${millis.toString().padStart(3, '0')}`;
 }
 
 export function GarageHome({
@@ -70,26 +50,26 @@ export function GarageHome({
   storage,
   compiled,
   savedBuilds,
-  activeTrack,
   balanceConfig,
   credits,
   user,
   settings,
-  sessionMode,
-  onChangeSessionMode,
   onSelectBuild,
   onBuildsChanged,
   onOpenLab,
   onOpenCircuitModal,
   onOpenSettings,
   onOpenAuth,
-  onLaunchDrive,
 }: IGarageHomeProps) {
   const [compareOpen, setCompareOpen] = useState(false);
   const [compareBId, setCompareBId] = useState<string>(
     () => savedBuilds.find((b) => b.id !== compiled.build.id)?.id ?? compiled.build.id
   );
   const [saveToast, setSaveToast] = useState<string | null>(null);
+  const deleteDialog = useRef<HTMLDialogElement>(null);
+  const [deleteTarget, setDeleteTarget] = useState<IVehicleBuildConfig | null>(null);
+  const [deletePending, setDeletePending] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const unitLabel = speedUnitLabel(settings.speedUnit);
 
@@ -106,14 +86,6 @@ export function GarageHome({
     compiledMap.get(savedBuilds.find((b) => b.id !== compiled.build.id)?.id ?? compiled.build.id) ??
     compiled;
 
-  const pbKey = makePbPartitionKey(
-    activeTrack.id,
-    getTrackVersion(activeTrack),
-    balanceConfig.version_id,
-    CURRENT_RULESET_VERSION
-  );
-  const trackPb = getTrackPersonalBest(pbKey);
-
   const handleDuplicate = (source: IVehicleBuildConfig) => {
     const id = `build_${Date.now().toString(36)}`;
     const copy: IVehicleBuildConfig = {
@@ -126,16 +98,26 @@ export function GarageHome({
     setCompareBId(source.id);
   };
 
-  const handleNewBuild = () => {
-    const base = createStarterBuild();
-    const id = `build_${Date.now().toString(36)}`;
-    const next: IVehicleBuildConfig = {
-      ...base,
-      id,
-      name: `Garage Spec #${savedBuilds.length + 1}`,
-    };
-    engine.updateBuild(next);
+  const handleNewBuild = (build: IVehicleBuildConfig) => {
+    engine.updateBuild(build);
     onBuildsChanged();
+  };
+
+  const handleDeleteBuild = async () => {
+    if (!deleteTarget || deletePending) return;
+    setDeletePending(true);
+    setDeleteError(null);
+    try {
+      const active = await storage.deleteSavedBuild(deleteTarget.id);
+      if (compiled.build.id !== active.id) engine.updateBuild(active);
+      if (compareBId === deleteTarget.id) setCompareBId(active.id);
+      onBuildsChanged();
+      deleteDialog.current?.close();
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : 'Could not delete this build.');
+    } finally {
+      setDeletePending(false);
+    }
   };
 
   const handleSaveBuild = async () => {
@@ -257,14 +239,12 @@ export function GarageHome({
                 Select, duplicate, or open in Lab
               </div>
             </div>
-            <button
-              type="button"
-              onClick={handleNewBuild}
+            <NewCarPicker
+              storage={storage}
+              priceMultiplier={balanceConfig.economy_bias.part_price_mult}
+              onCreate={handleNewBuild}
               className="flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1 text-[11px] font-semibold text-cyan-300 transition hover:border-cyan-400"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              <span>New</span>
-            </button>
+            />
           </div>
 
           <div className="flex-1 space-y-2 overflow-y-auto p-3">
@@ -286,6 +266,7 @@ export function GarageHome({
                   <div className="flex items-start justify-between gap-2">
                     <button
                       type="button"
+                      aria-pressed={isSelected}
                       onClick={() => onSelectBuild(b)}
                       className="min-w-0 flex-1 text-left"
                     >
@@ -309,6 +290,18 @@ export function GarageHome({
                       className="rounded-md border border-slate-700/80 bg-slate-900 p-1.5 text-slate-400 transition hover:border-cyan-400 hover:text-cyan-300"
                     >
                       <Copy className="h-3 w-3" />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Delete ${b.name}`}
+                      onClick={() => {
+                        setDeleteTarget(b);
+                        setDeleteError(null);
+                        deleteDialog.current?.showModal();
+                      }}
+                      className="rounded-md border border-slate-700 bg-slate-900 p-1.5 text-slate-400 hover:border-rose-400 hover:text-rose-300"
+                    >
+                      <Trash2 className="h-3 w-3" />
                     </button>
                   </div>
 
@@ -459,30 +452,6 @@ export function GarageHome({
                   </div>
                 </div>
 
-                {/* Course Best & Route Preview Card */}
-                <div className="space-y-2 rounded-xl border border-slate-800 bg-slate-900/65 p-3">
-                  <div className="flex items-center justify-between">
-                    <span className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-300">
-                      <Flag className="h-3.5 w-3.5 text-cyan-400" />
-                      {activeTrack.name}
-                    </span>
-                    <span className="rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[9px] text-slate-300">
-                      {activeTrack.difficulty}
-                    </span>
-                  </div>
-                  <TrackPreviewSvg track={activeTrack} showElevation={false} />
-                  <div className="flex items-center justify-between font-mono text-xs">
-                    <span className="text-slate-400">Personal Best</span>
-                    <span className="font-bold text-cyan-300">
-                      {trackPb.bestLapTimeMs !== null ? formatTime(trackPb.bestLapTimeMs) : '--:--.---'}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between font-mono text-[10px] text-slate-400">
-                    <span>Gold Target</span>
-                    <span>{formatTime(activeTrack.targetGoldTimeMs)}</span>
-                  </div>
-                </div>
-
                 {/* Quick Engineering Lab Entry Cards */}
                 <div className="grid grid-cols-2 gap-2">
                   <button
@@ -523,43 +492,6 @@ export function GarageHome({
         className="pointer-events-auto flex flex-wrap items-center justify-between gap-2 border-t border-slate-800/80 bg-[#0A0C10]/90 px-3 pt-2.5 backdrop-blur-md md:px-5"
         style={{ paddingBottom: 'var(--safe-bottom)' }}
       >
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={onOpenCircuitModal}
-            className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900/90 px-3 py-2 text-xs font-semibold text-white transition hover:border-cyan-400"
-          >
-            <Trophy className="h-3.5 w-3.5 text-amber-400" />
-            <span>{activeTrack.name}</span>
-          </button>
-
-          <div className="flex rounded-lg border border-slate-800 bg-slate-950/90 p-0.5 text-[11px] font-semibold">
-            {(
-              [
-                { id: 'practice', label: 'Practice' },
-                { id: 'time_trial', label: 'Time Trial' },
-                { id: 'drift', label: 'Drift' },
-              ] as const
-            ).map((m) => (
-              <button
-                key={m.id}
-                type="button"
-                onClick={() => onChangeSessionMode(m.id)}
-                className={`rounded-md px-2.5 py-1 transition ${
-                  sessionMode === m.id
-                    ? m.id === 'drift'
-                      ? 'bg-fuchsia-500/25 text-fuchsia-200'
-                      : 'bg-cyan-500/20 text-cyan-200'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                {m.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={() => onOpenLab(settings.labMode)}
@@ -571,14 +503,34 @@ export function GarageHome({
 
           <button
             type="button"
-            onClick={() => onLaunchDrive(false)}
+            onClick={onOpenCircuitModal}
             className="flex items-center gap-2 rounded-lg bg-cyan-400 px-5 py-2 text-xs font-black uppercase tracking-wider text-slate-950 shadow-[0_0_22px_rgba(0,240,255,0.32)] transition hover:bg-cyan-300"
           >
-            <Play className="h-3.5 w-3.5 fill-current" />
-            <span>Drive on Track</span>
+            <Flag className="h-3.5 w-3.5" />
+            <span>Choose course</span>
+          </button>
+      </footer>
+      <dialog
+        ref={deleteDialog}
+        aria-labelledby="delete-build-title"
+        onCancel={(event) => { if (deletePending) event.preventDefault(); }}
+        className="pointer-events-auto m-auto w-[calc(100%-2rem)] max-w-sm rounded-xl border border-slate-700 bg-[#0B0F17] p-5 text-slate-100 backdrop:bg-black/70"
+      >
+        <h2 id="delete-build-title" className="text-lg font-semibold">Delete {deleteTarget?.name}?</h2>
+        <p className="mt-2 text-sm text-slate-300">
+          This permanently removes the build. Owned parts and lap records stay in your account.
+          {savedBuilds.length === 1 && ' A fresh factory Apex will be available to drive.'}
+        </p>
+        {deleteError && <p role="alert" className="mt-3 text-sm text-rose-300">{deleteError}</p>}
+        <div className="mt-5 flex justify-end gap-2">
+          <button type="button" disabled={deletePending} onClick={() => deleteDialog.current?.close()}
+            className="rounded-lg border border-slate-700 px-3 py-2 text-sm">Cancel</button>
+          <button type="button" disabled={deletePending} onClick={() => void handleDeleteBuild()}
+            className="rounded-lg bg-rose-400 px-3 py-2 text-sm font-semibold text-slate-950 disabled:opacity-50">
+            {deletePending ? 'Deleting…' : 'Delete car'}
           </button>
         </div>
-      </footer>
+      </dialog>
     </div>
   );
 }

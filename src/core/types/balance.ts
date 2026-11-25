@@ -14,6 +14,11 @@ export const PhysicsBiasSchema = z.object({
   thermal_heat_soak_mult: z.number().min(0.5).max(2.0),
   weight_inertia_mult: z.number().min(0.5).max(2.0),
   turbo_lag_mult: z.number().min(0.5).max(2.0),
+  driving_pace: z.number().min(0.6).max(1).default(1),
+  steering_response: z.number().min(0.85).max(1.4).default(1.25),
+  drift_forgiveness: z.number().min(0).max(1).default(0.65),
+  traction_assist: z.number().min(0).max(1).default(0.55),
+  impact_damage_mult: z.number().min(0.5).max(2).default(1.45),
 });
 
 export const EconomyBiasSchema = z.object({
@@ -54,6 +59,11 @@ export const DEFAULT_BALANCE_CONFIG: IGlobalBalanceConfig = {
     thermal_heat_soak_mult: 1.0,
     weight_inertia_mult: 1.0,
     turbo_lag_mult: 1.0,
+    driving_pace: 1,
+    steering_response: 1.25,
+    drift_forgiveness: 0.65,
+    traction_assist: 0.55,
+    impact_damage_mult: 1.45,
   },
   economy_bias: {
     payout_mult: 1.0,
@@ -64,13 +74,14 @@ export const DEFAULT_BALANCE_CONFIG: IGlobalBalanceConfig = {
   },
 };
 
+// The first garage release stored 0.78 in its stock KV and browser config.
+export function migrateStockDrivingPace(config: IGlobalBalanceConfig): IGlobalBalanceConfig {
+  if (config.version_id !== 'v1.0.0' || config.physics_bias.driving_pace !== 0.78) return config;
+  return { ...config, physics_bias: { ...config.physics_bias, driving_pace: 1 } };
+}
+
 export function didPhysicsBiasChange(a: IPhysicsBias, b: IPhysicsBias): boolean {
-  return (
-    Math.abs(a.pacejka_grip_mult - b.pacejka_grip_mult) > 1e-6 ||
-    Math.abs(a.aero_drag_mult - b.aero_drag_mult) > 1e-6 ||
-    Math.abs(a.aero_downforce_mult - b.aero_downforce_mult) > 1e-6 ||
-    Math.abs(a.thermal_heat_soak_mult - b.thermal_heat_soak_mult) > 1e-6 ||
-    Math.abs(a.weight_inertia_mult - b.weight_inertia_mult) > 1e-6 ||
-    Math.abs(a.turbo_lag_mult - b.turbo_lag_mult) > 1e-6
+  return (Object.keys(DEFAULT_BALANCE_CONFIG.physics_bias) as (keyof IPhysicsBias)[]).some(
+    (key) => Math.abs(a[key] - b[key]) > 1e-6
   );
 }

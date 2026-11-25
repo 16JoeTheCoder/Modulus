@@ -362,16 +362,15 @@ export class PowertrainPlugin implements IModulusPlugin {
 
     // Gentle traction-control assist in Beginner / Sport presets (0 intervention in Pro)
     let tcScale = 1.0;
-    if (!state.aiEnabled && state.gear >= 1 && effectiveThrottle > 0.15) {
-      const tcThresh =
-        state.assistPreset === 'beginner'
-          ? 0.22
-          : state.assistPreset === 'sport'
-            ? 0.36
-            : 99;
+    const tractionAssist = this.balanceConfig.physics_bias.traction_assist;
+    if (tractionAssist > 0 && !state.aiEnabled && state.assistPreset !== 'pro' && state.gear >= 1 && effectiveThrottle > 0.15) {
+      const isDrift = this.ctx?.getSessionMode?.() === 'drift';
+      const beginner = state.assistPreset === 'beginner';
+      const tcThresh = (beginner ? 0.30 : 0.44) - tractionAssist * 0.15 + (isDrift ? 0.16 : 0);
       if (maxDrivenSlip > tcThresh) {
         const excess = maxDrivenSlip - tcThresh;
-        tcScale = clamp(1 - excess * (state.assistPreset === 'beginner' ? 1.8 : 1.1), 0.32, 1.0);
+        const correction = excess * tractionAssist * (beginner ? 3.0 : 1.9);
+        tcScale = clamp(1 - correction, isDrift ? 0.55 : 0.32, 1.0);
       }
     }
 

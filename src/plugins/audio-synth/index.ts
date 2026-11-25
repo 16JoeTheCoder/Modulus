@@ -333,6 +333,8 @@ class AudioSynthController implements IModulusPlugin {
         ? 3.0
         : layout === 'Rotary'
         ? 3.5
+        : layout === 'I3'
+        ? 1.5
         : layout === 'Flat-4'
         ? 1.92
         : 2.0;

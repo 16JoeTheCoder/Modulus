@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { Check, Lock, ShoppingCart } from 'lucide-react';
 import { CHASSIS_CATALOG, PARTS_CATALOG } from '../../content';
+import { STOCK_BRAKE_PAD, STOCK_OIL_COOLER } from '../../content/parts/auxiliaries';
+import { VEHICLE_TUNING_LIMITS } from '../../core/types';
 import type {
   AspirationType,
   BlockMaterial,
@@ -140,7 +142,7 @@ function DiscretePills<T extends string>({
   );
 }
 
-function PartSelector({
+export function PartSelector({
   label,
   module,
   subCategory,
@@ -201,6 +203,7 @@ function PartSelector({
       chips.push(`+${((m.downforceClFront ?? 0) + (m.downforceClRear ?? 0)).toFixed(2)} DF`);
     if (m.peakFrictionMu) chips.push(`μ ${m.peakFrictionMu.toFixed(2)}`);
     if (m.coolingCapacityKw) chips.push(`${m.coolingCapacityKw}kW cool`);
+    if (m.brakeFadeThresholdDeltaC) chips.push(`${m.brakeFadeThresholdDeltaC > 0 ? '+' : ''}${m.brakeFadeThresholdDeltaC}°C fade threshold`);
     return chips.length > 0 ? chips.join(' · ') : part.description;
   };
 
@@ -275,6 +278,16 @@ function PartSelector({
 }
 
 const SWATCHES = ['#00F0FF', '#F59E0B', '#FF3B30', '#10B981', '#F8FAFC', '#A855F7', '#F97316', '#3B82F6'];
+
+export function AuxiliaryPartSelector({ slot, build, onChangeBuild, ...shop }: Omit<ModuleEditorProps, 'activeModule'> & {
+  slot: 'brakePadId' | 'oilCoolerId';
+}) {
+  const isBrake = slot === 'brakePadId';
+  return <PartSelector {...shop} label={isBrake ? 'Brake pads' : 'Oil cooler'}
+    module={isBrake ? 'brakes' : 'cooling'} subCategory={isBrake ? 'pad' : 'oilCooler'}
+    equippedPartId={build.equippedPartIds[slot] ?? (isBrake ? STOCK_BRAKE_PAD : STOCK_OIL_COOLER)}
+    onEquip={(part) => onChangeBuild({ ...build, equippedPartIds: { ...build.equippedPartIds, [slot]: part.id } })} />;
+}
 
 export function ModuleEditor({
   activeModule,
@@ -424,9 +437,8 @@ export function ModuleEditor({
         <SliderControl
           label="Wheelbase (L)"
           value={build.chassis.wheelbaseM}
-          min={2.2}
-          max={2.95}
-          step={0.05}
+          {...VEHICLE_TUNING_LIMITS.wheelbaseM}
+          step={0.01}
           unit="m"
           precision={2}
           hint="Short = nimble hairpins; Long = high-speed stability"
@@ -438,9 +450,8 @@ export function ModuleEditor({
         <SliderControl
           label="Track Width (W)"
           value={build.chassis.trackWidthM}
-          min={1.5}
-          max={2.0}
-          step={0.02}
+          {...VEHICLE_TUNING_LIMITS.trackWidthM}
+          step={0.01}
           unit="m"
           precision={2}
           hint="Wider cuts lateral weight transfer but adds frontal drag"
@@ -542,7 +553,7 @@ export function ModuleEditor({
       <div className="space-y-4">
         <DiscretePills<EngineLayout>
           label="Engine Layout"
-          options={['I4', 'Flat-4', 'I6', 'V6', 'V8', 'Rotary']}
+          options={['I3', 'I4', 'I4 Diesel', 'Flat-4', 'I6', 'V6', 'V8', 'Rotary']}
           value={build.engine.layout}
           onChange={(layout) =>
             onChangeBuild({ ...build, engine: { ...build.engine, layout } })
@@ -552,11 +563,10 @@ export function ModuleEditor({
         <SliderControl
           label="Displacement"
           value={build.engine.displacementL}
-          min={1.3}
-          max={6.2}
-          step={0.1}
+          {...VEHICLE_TUNING_LIMITS.displacementL}
+          step={0.01}
           unit="L"
-          precision={1}
+          precision={2}
           onChange={(displacementL) =>
             onChangeBuild({ ...build, engine: { ...build.engine, displacementL } })
           }
@@ -628,9 +638,8 @@ export function ModuleEditor({
         <SliderControl
           label="Rev Limiter"
           value={build.engine.revLimiterRpm}
-          min={5500}
-          max={10000}
-          step={250}
+          {...VEHICLE_TUNING_LIMITS.revLimiterRpm}
+          step={50}
           unit="RPM"
           onChange={(revLimiterRpm) =>
             onChangeBuild({ ...build, engine: { ...build.engine, revLimiterRpm } })
@@ -1013,8 +1022,7 @@ export function ModuleEditor({
           <SliderControl
             label="Tire Width F"
             value={wt.tireWidthFrontMm}
-            min={195}
-            max={345}
+            {...VEHICLE_TUNING_LIMITS.tireWidthMm}
             step={10}
             unit="mm"
             onChange={(tireWidthFrontMm) => setWt({ tireWidthFrontMm })}
@@ -1022,8 +1030,7 @@ export function ModuleEditor({
           <SliderControl
             label="Tire Width R"
             value={wt.tireWidthRearMm}
-            min={195}
-            max={345}
+            {...VEHICLE_TUNING_LIMITS.tireWidthMm}
             step={10}
             unit="mm"
             onChange={(tireWidthRearMm) => setWt({ tireWidthRearMm })}
@@ -1123,6 +1130,9 @@ export function ModuleEditor({
             })
           }
         />
+
+        <AuxiliaryPartSelector slot="brakePadId" build={build} onChangeBuild={onChangeBuild}
+          priceMult={priceMult} isOwned={isOwned} onPurchase={onPurchase} />
 
         <SliderControl
           label="Front Brake Bias"
@@ -1275,6 +1285,8 @@ export function ModuleEditor({
           })
         }
       />
+      <AuxiliaryPartSelector slot="oilCoolerId" build={build} onChangeBuild={onChangeBuild}
+        priceMult={priceMult} isOwned={isOwned} onPurchase={onPurchase} />
     </div>
   );
 }
