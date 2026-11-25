@@ -34,9 +34,28 @@ interface IExtendedEngineApi {
   getDrivingAssists?: () => { transmissionMode: TransmissionMode; assistPreset: AssistPreset };
   setKeyBindings?: (partial: Partial<KeyBindingsConfig>) => void;
   getKeyBindings?: () => KeyBindingsConfig;
+  setSessionMode?: (mode: import('../contracts/simulation').SessionMode) => void;
+  getSessionMode?: () => import('../contracts/simulation').SessionMode;
+  onFixedStep?: (
+    listener: (
+      tick: number,
+      inputFrame: import('../contracts/simulation').IFixedStepInputFrame,
+      snapshot: IVehicleStateSnapshot
+    ) => void
+  ) => () => void;
 }
 
-interface IExtendedCompiledVehicle extends ICompiledVehicle {
+export interface IGhostHudState {
+  active: boolean;
+  hasGhost: boolean;
+  ghostBestLapMs: number | null;
+  liveDeltaMs: number | null;
+  ghostFinished: boolean;
+  isRecording: boolean;
+  pbImproved: boolean;
+}
+
+interface IExtendedCompiledVehicle extends Omit<ICompiledVehicle, 'cockpitEyeLocal' | 'steeringWheelLocal' | 'hoodCamLocal'> {
   cockpitEyeLocal?: Vec3;
   steeringWheelLocal?: Vec3;
   hoodCamLocal?: Vec3;
@@ -137,6 +156,61 @@ export function syncKeyBindingsToEngine(
 ): void {
   const ext = engine as unknown as IExtendedEngineApi;
   ext.setKeyBindings?.(keyBindings);
+}
+
+export function setSessionModeSafe(
+  engine: ModulusEngine,
+  mode: import('../contracts/simulation').SessionMode
+): void {
+  const ext = engine as unknown as IExtendedEngineApi;
+  ext.setSessionMode?.(mode);
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('modulus:session-mode', { detail: { mode } }));
+  }
+}
+
+export function subscribeFixedStepSafe(
+  engine: ModulusEngine,
+  listener: (
+    tick: number,
+    inputFrame: import('../contracts/simulation').IFixedStepInputFrame,
+    snapshot: IVehicleStateSnapshot
+  ) => void
+): (() => void) | null {
+  const ext = engine as unknown as IExtendedEngineApi;
+  if (typeof ext.onFixedStep === 'function') {
+    return ext.onFixedStep(listener);
+  }
+  return null;
+}
+
+export function subscribeGhostHudState(
+  engine: ModulusEngine,
+  handler: (state: IGhostHudState) => void
+): () => void {
+  const bus = engine.events as unknown as {
+    on: (ev: string, fn: (payload: unknown) => void) => () => void;
+  };
+  const unsubBus = bus.on('ghost:state', (payload) => {
+    if (payload && typeof payload === 'object') {
+      handler(payload as IGhostHudState);
+    }
+  });
+  const onWin = (e: Event) => {
+    const detail = (e as CustomEvent<IGhostHudState>).detail;
+    if (detail && typeof detail === 'object') {
+      handler(detail);
+    }
+  };
+  if (typeof window !== 'undefined') {
+    window.addEventListener('modulus:ghost-state', onWin);
+  }
+  return () => {
+    unsubBus();
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('modulus:ghost-state', onWin);
+    }
+  };
 }
 
 /**

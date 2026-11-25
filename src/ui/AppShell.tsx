@@ -11,9 +11,13 @@ import type {
 } from '../core/types';
 import type { SessionMode } from '../contracts/simulation';
 import { DebriefModal, type IDebriefReport } from './debrief/DebriefModal';
+import { DriftDebriefModal, type IDriftDebriefReport } from './drift/DriftDebriefModal';
+import { DriftHud } from './drift/DriftHud';
+import { useDriftSession } from './drift/useDriftSession';
 import {
   normalizeLapFinishedEvent,
   setCameraPresetSafe,
+  setSessionModeSafe,
   setSimulationPausedSafe,
   syncAssistsToEngine,
   syncKeyBindingsToEngine,
@@ -69,11 +73,32 @@ export function AppShell({ engine, storage }: IAppShellProps) {
 
   const [activeDebrief, setActiveDebrief] = useState<IDebriefReport | null>(null);
   const [lastDebrief, setLastDebrief] = useState<IDebriefReport | null>(null);
+  const [activeDriftDebrief, setActiveDriftDebrief] = useState<IDriftDebriefReport | null>(null);
   const lapPeaksRef = useRef({ peakLockup: 0, peakScrub: 0 });
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
   const sessionModeRef = useRef(sessionMode);
   sessionModeRef.current = sessionMode;
+
+  const handleDriftDebrief = useCallback(
+    (report: IDriftDebriefReport) => {
+      setActiveDriftDebrief(report);
+      setSimulationPausedSafe(engine, true);
+    },
+    [engine]
+  );
+
+  const driftSession = useDriftSession(
+    engine,
+    sessionMode,
+    screen === 'drive',
+    handleDriftDebrief
+  );
+
+  // Sync sessionMode to Engine (used by LapSectorTimer + rivals' ghost-renderer)
+  useEffect(() => {
+    setSessionModeSafe(engine, sessionMode);
+  }, [engine, sessionMode]);
 
   // Show CG/Aero overlays only inside Engineering Lab (keep Title & Garage Bay clean)
   useEffect(() => {
@@ -126,6 +151,7 @@ export function AppShell({ engine, storage }: IAppShellProps) {
         } else {
           setSimulationPausedSafe(engine, false);
           setActiveDebrief(null);
+          setActiveDriftDebrief(null);
           setScreen((prev) => (prev === 'drive' ? 'garage' : prev));
         }
       }),
@@ -141,6 +167,10 @@ export function AppShell({ engine, storage }: IAppShellProps) {
         setSavedBuilds([...storage.getGarageState().savedBuilds]);
       }),
       engine.events.on('lap:finished', (rawPayload) => {
+        // Drift sessions are scored separately from lap records & Time Trial debrief
+        if (sessionModeRef.current === 'drift') {
+          return;
+        }
         const track = engine.getActiveTrack();
         const cfg = engine.getBalanceConfig();
         const currentBuild = engine.getCompiledVehicle().build;
@@ -216,9 +246,19 @@ export function AppShell({ engine, storage }: IAppShellProps) {
   }, [engine, storage]);
 
   const handleLaunchDrive = useCallback(
-    (aiEnabled: boolean) => {
+    (aiEnabled: boolean, modeOverride?: 'practice' | 'time_trial' | 'drift') => {
       const track = engine.getActiveTrack();
       const build = engine.getCompiledVehicle().build;
+      const effectiveMode: SessionMode =
+        modeOverride ??
+        (!aiEnabled && track.courseTags?.includes('drift') && sessionModeRef.current === 'practice'
+          ? 'drift'
+          : sessionModeRef.current);
+      if (effectiveMode !== sessionModeRef.current) {
+        setSessionMode(effectiveMode);
+      }
+      setSessionModeSafe(engine, aiEnabled ? 'ai_race' : effectiveMode);
+
       const nextSession: ResumableSession = {
         trackId: track.id,
         buildId: build.id,
@@ -231,6 +271,7 @@ export function AppShell({ engine, storage }: IAppShellProps) {
       setResumableSession(nextSession);
 
       setActiveDebrief(null);
+      setActiveDriftDebrief(null);
       setCameraPresetSafe(engine, settingsRef.current.defaultCamera);
       engine.setAiEnabled(aiEnabled);
       engine.setVisualMode('track');
@@ -262,10 +303,10 @@ export function AppShell({ engine, storage }: IAppShellProps) {
 
   const handleCloseSettings = useCallback(() => {
     setSettingsOpen(false);
-    if (engine.getVisualMode() === 'track' && !activeDebrief) {
+    if (engine.getVisualMode() === 'track' && !activeDebrief && !activeDriftDebrief) {
       setSimulationPausedSafe(engine, false);
     }
-  }, [engine, activeDebrief]);
+  }, [engine, activeDebrief, activeDriftDebrief]);
 
   const handleTelemetryPeaks = useCallback((peaks: { peakLockup: number; peakScrub: number }) => {
     lapPeaksRef.current = peaks;
@@ -327,15 +368,18 @@ export function AppShell({ engine, storage }: IAppShellProps) {
         engine={engine}
         storage={storage}
         settings={settings}
-        debriefOpen={Boolean(activeDebrief)}
+        sessionMode={sessionMode}
+        debriefOpen={Boolean(activeDebrief || activeDriftDebrief)}
         onBackToGarage={() => {
           setActiveDebrief(null);
+          setActiveDriftDebrief(null);
           setSimulationPausedSafe(engine, false);
           engine.setVisualMode('lab');
           setScreen('garage');
         }}
         onOpenLab={() => {
           setActiveDebrief(null);
+          setActiveDriftDebrief(null);
           setSimulationPausedSafe(engine, false);
           engine.setVisualMode('lab');
           setScreen('lab');
@@ -350,6 +394,42 @@ export function AppShell({ engine, storage }: IAppShellProps) {
             : undefined
         }
         onTelemetryPeaks={handleTelemetryPeaks}
+      />
+
+      {screen === 'drive' && sessionMode === 'drift' && !activeDriftDebrief && (
+        <DriftHud
+          liveState={driftSession.liveState}
+          activeZoneName={driftSession.activeZoneName}
+          bestDriftScore={driftSession.bestDriftScore}
+          feedBadges={driftSession.feedBadges}
+          onFinishRun={driftSession.finishCurrentRun}
+        />
+      )}
+
+      <DriftDebriefModal
+        report={activeDriftDebrief}
+        onRetryRun={() => {
+          setActiveDriftDebrief(null);
+          setSimulationPausedSafe(engine, false);
+          driftSession.resetDriftRun();
+          engine.resetVehicleToStart();
+        }}
+        onKeepDrifting={() => {
+          setActiveDriftDebrief(null);
+          setSimulationPausedSafe(engine, false);
+        }}
+        onAdjustCar={() => {
+          setActiveDriftDebrief(null);
+          setSimulationPausedSafe(engine, false);
+          engine.setVisualMode('lab');
+          setScreen('lab');
+        }}
+        onBackToGarage={() => {
+          setActiveDriftDebrief(null);
+          setSimulationPausedSafe(engine, false);
+          engine.setVisualMode('lab');
+          setScreen('garage');
+        }}
       />
 
       <DebriefModal

@@ -30,9 +30,12 @@ import {
   getCameraPresetSafe,
   getTrackSectorNames,
   setCameraPresetSafe,
+  subscribeGhostHudState,
   subscribeLapInvalidated,
   subscribeSectorSplit,
+  type IGhostHudState,
 } from '../engineBridge';
+import type { SessionMode } from '../../contracts/simulation';
 import {
   formatKeyCodeLabel,
   formatSpeedValue,
@@ -48,6 +51,7 @@ export interface IDriveHudProps {
   engine: ModulusEngine;
   storage: StorageSync;
   settings: PlayerSettings;
+  sessionMode: SessionMode;
   debriefOpen: boolean;
   onBackToGarage: () => void;
   onOpenLab: () => void;
@@ -90,6 +94,7 @@ export function DriveHud({
   engine,
   storage,
   settings,
+  sessionMode,
   debriefOpen,
   onBackToGarage,
   onOpenLab,
@@ -98,6 +103,7 @@ export function DriveHud({
   onTelemetryPeaks,
 }: IDriveHudProps) {
   const [visualMode, setVisualMode] = useState<VisualMode>(() => engine.getVisualMode());
+  const [ghostHud, setGhostHud] = useState<IGhostHudState | null>(null);
   const [cameraPreset, setCameraPreset] = useState<ExtendedCameraPreset>(() =>
     getCameraPresetSafe(engine)
   );
@@ -134,6 +140,7 @@ export function DriveHud({
       engine.events.on('track:selected', ({ schema }) => setActiveTrack(schema)),
       engine.events.on('config:updated', ({ config }) => setBalanceConfig(config)),
       engine.events.on('auth:changed', ({ user: u }) => setUser(u)),
+      subscribeGhostHudState(engine, (gs) => setGhostHud(gs)),
       engine.events.on('vehicle:reset', () => {
         peaksRef.current = { peakLockup: 0, peakScrub: 0 };
         setInvalidFlash(null);
@@ -387,7 +394,7 @@ export function DriveHud({
       </div>
 
       {/* CENTER-TOP FEEDBACK BANNERS (Lap Toast, Sector Split, Standstill/Reverse Cue) */}
-      {!debriefOpen && (
+      {!debriefOpen && sessionMode !== 'drift' && (
         <div className="pointer-events-none fixed top-16 left-1/2 z-30 flex -translate-x-1/2 flex-col items-center gap-1.5">
           {lapToast && (
             <div className="pointer-events-auto flex items-center gap-3 rounded-xl border border-cyan-400/60 bg-[#0A0C10]/90 px-4 py-2.5 shadow-[0_0_24px_rgba(0,240,255,0.25)] backdrop-blur-md">
@@ -524,6 +531,28 @@ export function DriveHud({
               </span>
             )}
           </div>
+
+          {/* Live Ghost Delta (Time Trial mode, driven by rivals' ghost-renderer) */}
+          {sessionMode === 'time_trial' && ghostHud && ghostHud.active && (
+            <div className="mt-1.5 flex items-center justify-between border-t border-slate-800/80 pt-1.5 font-mono text-[10px]">
+              <span className="text-cyan-300">
+                {ghostHud.hasGhost ? 'GHOST' : ghostHud.isRecording ? 'REC PB' : 'TT'}
+              </span>
+              {ghostHud.hasGhost && ghostHud.liveDeltaMs !== null ? (
+                <span
+                  className={`font-bold ${
+                    ghostHud.liveDeltaMs <= 0 ? 'text-emerald-400' : 'text-rose-400'
+                  }`}
+                >
+                  {formatDelta(ghostHud.liveDeltaMs)}
+                </span>
+              ) : (
+                <span className="text-slate-400">
+                  {ghostHud.isRecording ? 'RECORDING' : 'READY'}
+                </span>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Right Alerts: Lockup, Scrub, Limp Mode, Diffuser Stall, Damage */}

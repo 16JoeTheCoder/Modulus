@@ -57,7 +57,7 @@ export interface ILabViewProps {
   settings: PlayerSettings;
   onBackToGarage: () => void;
   onOpenSettings: () => void;
-  onLaunchDrive: (aiEnabled: boolean) => void;
+  onLaunchDrive: (aiEnabled: boolean, modeOverride?: 'practice' | 'time_trial' | 'drift') => void;
 }
 
 const MODULES: Array<{
@@ -179,8 +179,8 @@ export function EngineeringLab({
     }
   };
 
-  const handleLaunch = (aiEnabled: boolean) => {
-    onLaunchDrive(aiEnabled);
+  const handleLaunch = (aiEnabled: boolean, modeOverride?: 'practice' | 'time_trial' | 'drift') => {
+    onLaunchDrive(aiEnabled, modeOverride);
   };
 
   const selectModule = (mod: PartModuleCategory) => {
