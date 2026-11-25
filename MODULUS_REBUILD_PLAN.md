@@ -117,4 +117,4 @@ If the four friends are unavailable for the connectivity check, record that fiel
 
 ## Antigravity kickoff
 
-> Read `MODULUS_REBUILD_PLAN.md` and `CHASSIS_ROSTER.md` first. Inspect the working tree and current game paths. Implement the plan in the listed phases, starting with the baseline and connectivity check and the first playable driving slice. Use the existing architecture as a baseline and version any interfaces that need to evolve. Verify each phase in a real browser before adding the next, and record what was measured separately from what is proposed. Keep TURN disabled, validate against local or isolated data, and leave deployment, billing changes and production migrations for a separate release instruction.
+Start with the [Antigravity handoff](ANTIGRAVITY_HANDOFF.md) for the current prompt, swarm roles, map packs, and first implementation tasks.
